@@ -1,47 +1,103 @@
 # Grade Tributária BA
 
-Sistema web (Next.js 14 + TypeScript) que lê o "Cadastro de Produtos" — a
-planilha de layout fixo que os clientes do escritório enviam — e devolve a
-mesma planilha com os campos de classificação fiscal preenchidos ou
-validados:
+Sistema web (Next.js 14 + TypeScript) para o escritório de contabilidade
+classificar fiscalmente o "Cadastro de Produtos" — a planilha de layout
+fixo que os clientes (supermercados na Bahia) enviam — devolvendo a mesma
+planilha com os campos preenchidos ou validados, com memória por empresa:
 
+- **Cadastro de empresas**: cada cliente tem regime tributário, instruções
+  personalizadas, anexos de Substituição Tributária e regras aprendidas com
+  correções manuais — tudo usado automaticamente no processamento daquela
+  empresa.
+- **Instruções em português livre** por processamento (regime cumulativo/
+  não-cumulativo, "não trabalha com [segmento]", "todos os produtos são
+  [padrão]", "considerar redução de X% para [segmento]") — o que não for
+  reconhecido aparece num aviso, nunca é aplicado por adivinhação.
 - **CFOP de saída, CST de ICMS, CST de PIS/COFINS e CST/cClassTrib de
-  IBS/CBS**, preenchidos automaticamente com base na coluna **Tributação**
-  (Tributado / Substituição tributária / Não tributado / Isento) e em
-  sobrescritas por **NCM** (cesta básica, monofásicos, reduções específicas);
+  IBS/CBS**, preenchidos automaticamente com base na coluna **Tributação**,
+  nos anexos de ST ativos da empresa e em sobrescritas por **NCM** (cesta
+  básica, monofásicos, reduções específicas de supermercado).
 - Linhas que o cliente já enviou classificadas **não são sobrescritas** —
-  apenas validadas (formato do código, coerência com o padrão esperado);
-- Cada linha recebe um **Status** (`OK`, `Preenchido automaticamente`,
-  `Divergência detectada` ou `Revisar manualmente`) e uma **Observação**
-  explicando o motivo quando não for `OK`.
+  apenas validadas (formato do código, coerência com o padrão esperado).
+- **Regra de ouro**: qualquer ambiguidade (segmento excluído por instrução,
+  NCM sabidamente ambíguo, Tributação não reconhecida) nunca é "chutada" —
+  vira Status `Dúvida — aguardando instrução`, com Observação explicando o
+  motivo.
+- **Histórico** por empresa (data, arquivo, instruções aplicadas, anexos
+  ativos, contadores) e **aprendizado com correção**: compare um
+  processamento anterior com a planilha que você corrigiu manualmente e
+  aprove, uma a uma, as divergências que devem virar regras permanentes
+  daquela empresa — nada é aplicado sem aprovação explícita.
 
 Todo o processamento acontece **no navegador**, em lotes (para não travar a
 interface em planilhas de dezenas de milhares de linhas) — a planilha
-enviada não é transmitida a nenhum servidor. Não há banco de dados nesta
-fase.
+enviada não é transmitida a nenhum servidor. Cadastro de empresas, anexos,
+regras aprendidas e histórico ficam em `localStorage` (sem backend nesta
+fase); os arquivos de resultado de cada execução ficam em memória, e são
+perdidos ao recarregar a página.
 
 > ⚠️ **Aviso**: este sistema apoia o trabalho do analista fiscal, mas **não
 > substitui a revisão técnica** antes da emissão de documentos fiscais.
-> Linhas com status diferente de `OK` exigem confirmação humana. A tabela de
-> cClassTrib do IBS/CBS muda com frequência — confirme sempre a versão
-> vigente no [Portal Nacional da NF-e](https://www.nfe.fazenda.gov.br).
+> Linhas com status diferente de `OK` exigem confirmação humana — inclusive
+> `Dúvida — aguardando instrução`, que nunca deve ser preenchida por chute.
+> A tabela de cClassTrib do IBS/CBS muda com frequência — confirme sempre a
+> versão vigente no [Portal Nacional da NF-e](https://www.nfe.fazenda.gov.br).
+> As alíquotas de IBS/CBS usadas (`ALIQUOTA_IBS_TESTE`/`ALIQUOTA_CBS_TESTE`
+> em `lib/tables.ts`) são as de teste do Informe Técnico NF-e — troque-as
+> quando as alíquotas oficiais entrarem em vigor.
 
 ## Estrutura do projeto
 
 ```
-app/            → páginas (page.tsx, layout.tsx, globals.css) — interface web
-lib/rules.ts    → motor de decisão fiscal (a "lógica de negócio")
-lib/tables.ts   → padrões de Tributação e tabela aberta de sobrescritas por NCM
-lib/excel.ts    → leitura da planilha do cliente e geração do Excel de saída
-lib/types.ts    → tipos compartilhados
-public/         → planilha-modelo.xlsx (exemplo de entrada, 30 linhas)
-scripts/        → script que gera a planilha-modelo
+app/page.tsx           → fluxo principal: Empresa → Instruções → Enviar → Conferir → Baixar
+app/empresas/          → cadastro de empresas (criar/editar/excluir, anexos de ST)
+app/historico/         → histórico de processamentos por empresa
+app/aprender/          → comparação com planilha corrigida + aprovação de regras
+app/layout.tsx          → layout raiz (fontes, tema, NavBar)
+app/globals.css         → design system (tema claro/escuro)
+app/components/         → componentes de UI (ver abaixo)
+
+lib/rules.ts            → motor de decisão fiscal
+lib/tables.ts           → padrões de Tributação, alíquotas de teste e tabela de sobrescritas por NCM
+lib/instructions.ts     → interpretação de instruções em português livre
+lib/anexos.ts           → leitura/mapeamento de anexos de ST
+lib/empresas.ts         → cadastro de empresas (persistência em localStorage)
+lib/historico.ts        → histórico de processamentos (metadados persistidos + cache em memória)
+lib/aprendizado.ts      → comparação entre um resultado anterior e uma planilha corrigida
+lib/armazenamento.ts    → wrapper fino sobre localStorage
+lib/excel.ts            → leitura da planilha do cliente e geração do Excel de saída
+lib/types.ts            → tipos compartilhados
+
+public/                 → planilha-modelo.xlsx (exemplo de entrada, 30 linhas)
+scripts/                → script que gera a planilha-modelo
 ```
 
-O motor de regras (`lib/rules.ts` e `lib/tables.ts`) é isolado da interface
-de propósito, para facilitar que novas regras/exceções por NCM sejam
-adicionadas com o tempo. Para incluir um caso novo identificado na prática,
-adicione uma entrada em `NCM_OVERRIDES`, em `lib/tables.ts`.
+O motor de regras (`lib/rules.ts`, `lib/tables.ts`, `lib/instructions.ts`,
+`lib/anexos.ts`) é isolado da interface de propósito, para facilitar que
+novas regras/exceções por NCM sejam adicionadas com o tempo. Para incluir
+um caso novo identificado na prática, adicione uma entrada em
+`NCM_OVERRIDES`, em `lib/tables.ts`.
+
+### Fluxo principal (`app/page.tsx`)
+
+1. **Empresa** — escolhe o cliente (ou cria um novo, inline).
+2. **Instruções** — texto livre para este processamento, pré-preenchido com
+   as instruções salvas na empresa.
+3. **Enviar planilha** — upload `.xls`/`.xlsx`.
+4. **Conferir classificação** — barra de progresso, depois resumo e tabela
+   com filtro por Status.
+5. **Baixar arquivo** — mesmo layout de entrada, com Status e Observação.
+
+### Prioridade de resolução no motor (`lib/rules.ts`)
+
+Da mais forte para a mais fraca: **regra aprendida da empresa** (por NCM,
+Bloco de aprendizado) → **diretiva de instrução** do processamento (padrão
+forçado, redução por segmento) → **anexo ativo da empresa** (decide ST) →
+**sobrescrita por NCM** (`NCM_OVERRIDES`, incluindo entradas marcadas como
+`ambiguo`, que forçam dúvida) → **padrão de Tributação** (Tributado/ST,
+ajustado por regime cumulativo/não-cumulativo). Exclusão de segmento por
+instrução e NCM ambíguo sempre vencem tudo isso, virando
+`Dúvida — aguardando instrução` sem preencher nada.
 
 ## Planilha de entrada
 
@@ -73,15 +129,65 @@ parcial.
 - **Não tributado / Isento** → nada é preenchido automaticamente; a linha é
   sempre marcada para revisão manual.
 - Sobrescritas por NCM (`lib/tables.ts`, tabela `NCM_OVERRIDES`) têm
-  prioridade sobre o padrão de Tributação para os campos que definem.
+  prioridade sobre o padrão de Tributação para os campos que definem, exceto
+  quando um anexo de ST ativo da empresa ou uma regra aprendida dizem o
+  contrário (ver ordem de prioridade acima).
 - Se a linha já veio classificada pelo cliente, o motor **nunca sobrescreve**
   — só valida o formato do código (dígitos esperados) e a coerência com o
   padrão/sobrescrita aplicável, sinalizando divergência quando for o caso.
 
 A saída mantém o mesmo layout (título mesclado, aba e cabeçalho originais
 intactos), com duas colunas adicionais: **Status** (`OK`, `Preenchido
-automaticamente`, `Divergência detectada` ou `Revisar manualmente`) e
-**Observação** (motivo, quando o status não for `OK`).
+automaticamente`, `Divergência detectada`, `Revisar manualmente` ou `Dúvida
+— aguardando instrução`) e **Observação** (motivo, quando o status não for
+`OK`).
+
+## Empresas, instruções e anexos de ST
+
+Na tela **Empresas** (`/empresas`) você cadastra cada cliente: nome, CNPJ,
+ramo, UF, regime tributário (Lucro Real = PIS/COFINS não-cumulativo por
+padrão; Presumido/Simples = cumulativo) e instruções personalizadas. Editando
+uma empresa já criada, você também pode subir **anexos de Substituição
+Tributária** (Excel ou CSV — tolerante a variações de cabeçalho como "NCM"/
+"N.C.M."/"Código NCM"; se não detectar automaticamente, a tela pede para
+mapear manualmente as colunas). Anexos **ativos** passam a decidir a ST por
+NCM no processamento, com prioridade sobre a coluna Tributação — e o motor
+sinaliza divergência se o CFOP que o cliente já preencheu não bater com o
+anexo.
+
+No início de cada processamento, a tela **Instruções** deixa editar (só para
+aquela execução) o texto salvo na empresa. Comandos reconhecidos na v1
+(por palavra-chave, sem IA externa):
+
+- "regime cumulativo" / "regime não-cumulativo" — sobrescreve o regime
+  padrão da empresa para PIS/COFINS;
+- "não trabalha com [segmento]" — produtos daquele segmento (casados pelo
+  Nome contra um dicionário de palavras-chave em `lib/instructions.ts`) viram
+  `Dúvida — aguardando instrução`;
+- "todos os produtos são [tributado/isento/ST]" — força o padrão para toda a
+  planilha;
+- "considerar redução de X% para [segmento]" — aplica a redução ao campo
+  RED. B.C. dos produtos daquele segmento.
+
+Instruções que não forem reconhecidas aparecem num aviso no topo do
+resultado ("As seguintes instruções não foram aplicadas automaticamente")
+— nunca são aplicadas por adivinhação.
+
+## Histórico e aprendizado com correção
+
+Cada processamento fica registrado no **Histórico** (`/historico`) por
+empresa: data/hora, arquivo, instruções aplicadas, anexos ativos e
+contadores. O arquivo de resultado em si fica em memória (perdido ao
+recarregar a página) — navegando pelo menu (sem recarregar) ele continua
+disponível para baixar de novo.
+
+Em **Aprender com correção** (`/aprender`), escolha a empresa e um
+processamento anterior, suba a planilha que você corrigiu manualmente no
+Excel, e o sistema mostra, campo a campo, o que mudou (casando as linhas
+pelo Código do produto). Para cada divergência: **Aprovar**, **Descartar**
+ou **Aprovar todas do mesmo NCM**. Só depois de aprovadas as regras são
+salvas na empresa (`RegraAprendida`) e passam a ter a maior prioridade nos
+próximos processamentos — nada é aplicado sem essa aprovação explícita.
 
 ## Rodando localmente
 
@@ -150,3 +256,19 @@ automaticamente um novo deploy.
 - A tabela de resultado usa paginação (100 linhas por página) para manter a
   interface responsiva em planilhas com dezenas de milhares de linhas; o
   arquivo baixado contém todas as linhas.
+- O parser de instruções (`lib/instructions.ts`) é heurístico, baseado em
+  palavras-chave e expressões regulares — não usa IA externa. Frases fora do
+  vocabulário reconhecido aparecem no aviso "instruções não reconhecidas" e
+  nunca são aplicadas silenciosamente.
+- O casamento de "segmento" (usado nas diretivas de instrução) é feito por
+  busca de palavras-chave no campo Nome do produto, pois o layout do cliente
+  não tem uma coluna dedicada de segmento. É uma aproximação: produtos com
+  nomes atípicos podem não ser reconhecidos por um segmento esperado.
+- Anexos de ST e histórico de processamentos ficam em `localStorage`, que tem
+  capacidade finita (tipicamente alguns MB por origem). O histórico mantém só
+  as 20 execuções mais recentes por empresa, descartando as mais antigas
+  quando necessário.
+- Os resultados completos de cada processamento (usados no histórico e no
+  fluxo de aprendizado) ficam em cache **só em memória** — não são
+  persistidos. Um recarregamento completo da página (F5) limpa esse cache;
+  navegue pelo menu superior (links internos) para preservá-lo entre telas.

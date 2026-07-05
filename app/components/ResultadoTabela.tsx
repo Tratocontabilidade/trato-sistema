@@ -11,6 +11,7 @@ const STATUS_FILTROS: { valor: StatusLinha | "todos"; rotulo: string }[] = [
   { valor: "Preenchido automaticamente", rotulo: "Preenchido automaticamente" },
   { valor: "Divergência detectada", rotulo: "Divergência detectada" },
   { valor: "Revisar manualmente", rotulo: "Revisar manualmente" },
+  { valor: "Dúvida — aguardando instrução", rotulo: "Dúvida — aguardando instrução" },
 ];
 
 function classeBadgeStatus(status: StatusLinha): string {
@@ -23,6 +24,8 @@ function classeBadgeStatus(status: StatusLinha): string {
       return "badge--danger";
     case "Revisar manualmente":
       return "badge--warn";
+    case "Dúvida — aguardando instrução":
+      return "badge--duvida";
   }
 }
 

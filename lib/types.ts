@@ -5,11 +5,15 @@
 // com os campos de classificação preenchidos/validados, mais duas colunas
 // de controle (Status e Observação).
 
+import type { Diretiva } from "./instructions";
+import type { AnexoEmpresa, RegraAprendida } from "./empresas";
+
 export type StatusLinha =
   | "OK"
   | "Preenchido automaticamente"
   | "Divergência detectada"
-  | "Revisar manualmente";
+  | "Revisar manualmente"
+  | "Dúvida — aguardando instrução";
 
 /**
  * Linha lida da planilha do cliente, já normalizada.
@@ -54,4 +58,20 @@ export interface ClientProdutoEntrada {
 export interface ClientProdutoResultado extends ClientProdutoEntrada {
   status: StatusLinha;
   observacao: string;
+}
+
+/**
+ * Contexto opcional passado ao motor para um processamento específico:
+ * regime de PIS/COFINS já resolvido (instrução do processamento > regime
+ * cadastrado na empresa > padrão não-cumulativo) e as diretivas
+ * interpretadas de `lib/instructions.ts` que dependem do produto (exclusão
+ * de segmento, padrão forçado, redução por segmento).
+ */
+export interface ContextoClassificacao {
+  regime: "cumulativo" | "nao_cumulativo";
+  diretivas: Diretiva[];
+  /** Anexos ativos da empresa (Bloco 3) — quando presentes, decidem ST por NCM com prioridade sobre a coluna Tributação. */
+  anexosAtivos?: AnexoEmpresa[];
+  /** Regras aprendidas da empresa (Bloco 5) — maior prioridade de todas, por NCM+campo. */
+  regrasAprendidas?: RegraAprendida[];
 }
