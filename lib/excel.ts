@@ -1,231 +1,250 @@
-// Leitura da planilha de entrada e geração da planilha de saída, usando
-// SheetJS (xlsx). Todo o processamento acontece no navegador — nenhum
-// arquivo é enviado a um servidor.
+// Leitura e geração da planilha "Cadastro de Produtos" (layout fixo dos
+// clientes do escritório), usando SheetJS (xlsx). Aceita .xls e .xlsx — o
+// SheetJS detecta o formato automaticamente a partir do conteúdo do
+// arquivo. Todo o processamento acontece no navegador.
 
 import * as XLSX from "xlsx";
-import type {
-  Destinatario,
-  Destino,
-  ProdutoEntrada,
-  ProdutoResultado,
-  SimNaoVerificar,
-  TipoOperacao,
-} from "./types";
-
-const NOME_ABA_ENTRADA = "Produtos";
+import type { ClientProdutoEntrada, ClientProdutoResultado } from "./types";
 
 const REGEX_DIACRITICOS = /[\u0300-\u036f]/g;
 
-function normalizarChave(valor: unknown): string {
+function normalizarChaveCabecalho(valor: unknown): string {
   return String(valor ?? "")
     .normalize("NFD")
     .replace(REGEX_DIACRITICOS, "")
-    .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
+    .replace(/[^a-z0-9]/g, "");
 }
 
-/** Lê um campo de uma linha buscando entre vários nomes de coluna possíveis (tolerante a acento/maiúsculas). */
-function campo(linha: Record<string, unknown>, ...aliases: string[]): string {
-  const chaves = new Map<string, unknown>();
-  for (const [k, v] of Object.entries(linha)) {
-    chaves.set(normalizarChave(k), v);
+/** Ordem fixa das 19 colunas do layout do cliente. `chave` é o cabeçalho normalizado; `campo` é a propriedade correspondente em ClientProdutoEntrada/Resultado. */
+const COLUNAS_ESPERADAS = [
+  { chave: "codigo", campo: "codigo" },
+  { chave: "nome", campo: "nome" },
+  { chave: "codigodebarras", campo: "codigoBarras" },
+  { chave: "un", campo: "un" },
+  { chave: "tributacao", campo: "tributacao" },
+  { chave: "precounit", campo: "precoUnit" },
+  { chave: "ncm", campo: "ncm" },
+  { chave: "cfopsaidas", campo: "cfopSaidas" },
+  { chave: "aliqfcp", campo: "aliqFcp" },
+  { chave: "csticms", campo: "cstIcms" },
+  { chave: "cstpiscofins", campo: "cstPisCofins" },
+  { chave: "pis", campo: "pis" },
+  { chave: "cofins", campo: "cofins" },
+  { chave: "natrecieta", campo: "natReceita" },
+  { chave: "cstibscbs", campo: "cstIbsCbs" },
+  { chave: "cclasstrib", campo: "cclasstrib" },
+  { chave: "redbc", campo: "redBc" },
+  { chave: "ibs", campo: "ibs" },
+  { chave: "cbs", campo: "cbs" },
+] as const;
+
+type LinhaBruta = (string | number)[];
+
+interface Merge {
+  s: { r: number; c: number };
+  e: { r: number; c: number };
+}
+
+export interface PlanilhaClienteContexto {
+  nomeAba: string;
+  tituloOriginal: string;
+  cabecalhoOriginal: LinhaBruta;
+  mapaColunas: Record<string, number>;
+  mergeTitulo: Merge | null;
+}
+
+function paraNumeroOuNull(bruto: unknown): number | null {
+  if (bruto === null || bruto === undefined || bruto === "") return null;
+  if (typeof bruto === "number") return Number.isFinite(bruto) ? bruto : null;
+  const texto = String(bruto).trim().replace(",", ".");
+  if (texto === "") return null;
+  const n = Number(texto);
+  return Number.isFinite(n) ? n : null;
+}
+
+function textoCelula(linha: LinhaBruta, indice: number | undefined): string {
+  if (indice === undefined) return "";
+  const v = linha[indice];
+  return v === null || v === undefined ? "" : String(v).trim();
+}
+
+function detectarAba(workbook: XLSX.WorkBook): PlanilhaClienteContexto | null {
+  for (const nomeAba of workbook.SheetNames) {
+    const sheet = workbook.Sheets[nomeAba];
+    if (!sheet) continue;
+
+    const linhas = XLSX.utils.sheet_to_json<LinhaBruta>(sheet, { header: 1, defval: "", raw: true });
+    if (linhas.length < 2) continue;
+
+    const cabecalho = linhas[1] ?? [];
+    const mapaColunas: Record<string, number> = {};
+    cabecalho.forEach((celula, indice) => {
+      const chave = normalizarChaveCabecalho(celula);
+      if (chave) mapaColunas[chave] = indice;
+    });
+
+    const todasPresentes = COLUNAS_ESPERADAS.every((c) => mapaColunas[c.chave] !== undefined);
+    if (!todasPresentes) continue;
+
+    const tituloOriginal = String(linhas[0]?.[0] ?? "").trim();
+    const merges = ((sheet["!merges"] as Merge[] | undefined) ?? []).filter((m) => m.s.r === 0);
+
+    return {
+      nomeAba,
+      tituloOriginal,
+      cabecalhoOriginal: cabecalho,
+      mapaColunas,
+      mergeTitulo: merges[0] ?? null,
+    };
   }
-  for (const alias of aliases) {
-    const valor = chaves.get(normalizarChave(alias));
-    if (valor !== undefined) return String(valor).trim();
-  }
-  return "";
+  return null;
 }
 
-const MAPA_TIPO_OPERACAO: Record<string, TipoOperacao> = {
-  venda: "venda",
-  compra: "compra",
-  devolucao_compra: "devolucao_compra",
-  devolucao_de_compra: "devolucao_compra",
-  devolucao_venda: "devolucao_venda",
-  devolucao_de_venda: "devolucao_venda",
-  transferencia: "transferencia",
-  bonificacao_doacao: "bonificacao_doacao",
-  bonificacao_e_doacao: "bonificacao_doacao",
-  bonificacao: "bonificacao_doacao",
-  doacao: "bonificacao_doacao",
-  remessa_conserto: "remessa_conserto",
-  remessa_para_conserto: "remessa_conserto",
-  retorno_conserto: "retorno_conserto",
-  retorno_de_conserto: "retorno_conserto",
-};
-
-const MAPA_DESTINO: Record<string, Destino> = {
-  interna: "interna",
-  interestadual: "interestadual",
-  exportacao: "exportacao",
-};
-
-const MAPA_DESTINATARIO: Record<string, Destinatario> = {
-  consumidor_final: "consumidor_final",
-  contribuinte: "contribuinte",
-  orgao_publico: "orgao_publico",
-};
-
-const MAPA_SIM_NAO: Record<string, SimNaoVerificar> = {
-  sim: "sim",
-  s: "sim",
-  yes: "sim",
-  nao: "nao",
-  n: "nao",
-  no: "nao",
-  verificar: "verificar",
-  "": "verificar",
-};
-
-function paraSimNaoVerificar(valor: string): SimNaoVerificar {
-  return MAPA_SIM_NAO[normalizarChave(valor)] ?? "verificar";
-}
-
-export interface LeituraPlanilha {
-  produtos: ProdutoEntrada[];
+export interface LeituraPlanilhaCliente {
+  produtos: ClientProdutoEntrada[];
   erros: string[];
+  contexto: PlanilhaClienteContexto | null;
 }
 
-/** Lê um ArrayBuffer de planilha .xlsx e retorna os produtos normalizados + erros de linha. */
-export function lerPlanilhaProdutos(dados: ArrayBuffer): LeituraPlanilha {
+/** Lê um ArrayBuffer de planilha .xls/.xlsx no layout "Cadastro de Produtos". */
+export function lerPlanilhaCliente(dados: ArrayBuffer): LeituraPlanilhaCliente {
   const workbook = XLSX.read(dados, { type: "array" });
-  const nomeAba = workbook.SheetNames.includes(NOME_ABA_ENTRADA)
-    ? NOME_ABA_ENTRADA
-    : workbook.SheetNames[0];
-  const aba = workbook.Sheets[nomeAba];
-  if (!aba) {
-    return { produtos: [], erros: [`A planilha não contém nenhuma aba de dados.`] };
+  const contexto = detectarAba(workbook);
+
+  if (!contexto) {
+    return {
+      produtos: [],
+      erros: [
+        'Nenhuma aba com as 19 colunas esperadas do "Cadastro de Produtos" foi encontrada (verifique se o cabeçalho está na linha 2).',
+      ],
+      contexto: null,
+    };
   }
 
-  const linhas = XLSX.utils.sheet_to_json<Record<string, unknown>>(aba, { defval: "" });
+  const sheet = workbook.Sheets[contexto.nomeAba];
+  const linhas = XLSX.utils.sheet_to_json<LinhaBruta>(sheet, { header: 1, defval: "", raw: true });
+  const dadosLinhas = linhas.slice(2); // linha 1 = título, linha 2 = cabeçalho
 
-  const produtos: ProdutoEntrada[] = [];
+  const produtos: ClientProdutoEntrada[] = [];
   const erros: string[] = [];
+  const m = contexto.mapaColunas;
 
-  linhas.forEach((linha, indice) => {
-    const numeroLinha = indice + 2; // linha 1 = cabeçalho
-    const codigo = campo(linha, "Código", "Codigo");
-    const descricao = campo(linha, "Descrição", "Descricao");
-    const ncmBruto = campo(linha, "NCM");
-    const ncm = ncmBruto.replace(/\D/g, "");
-    const tipoOperacaoBruto = campo(linha, "Tipo Operação", "Tipo Operacao", "Tipo de Operação");
-    const destinoBruto = campo(linha, "Destino");
-    const destinatarioBruto = campo(linha, "Destinatário", "Destinatario");
-    const origem = campo(linha, "Origem");
-    const stBahia = campo(linha, "ST Bahia", "ST BA");
-    const monofasico = campo(linha, "Monofásico PIS/COFINS", "Monofasico PIS/COFINS", "Monofásico PIS COFINS");
-    const isento = campo(linha, "Isento PIS/COFINS", "Isento PIS COFINS");
-    const anexoLc214 = campo(linha, "Anexo LC 214/2025", "Anexo LC 214", "Anexo LC214/2025");
+  dadosLinhas.forEach((linha, indice) => {
+    const numeroLinha = indice + 3;
+    const vazia = linha.every((c) => c === null || c === undefined || String(c).trim() === "");
+    if (vazia) return;
 
-    if (!codigo && !descricao && !ncmBruto && !tipoOperacaoBruto) {
-      return; // linha em branco — ignora silenciosamente
-    }
-
-    const problemasLinha: string[] = [];
-    if (!codigo) problemasLinha.push("Código ausente");
-    if (!descricao) problemasLinha.push("Descrição ausente");
-    if (!/^\d{8}$/.test(ncm)) problemasLinha.push(`NCM inválido ("${ncmBruto}") — informe 8 dígitos`);
-
-    const tipoOperacao = MAPA_TIPO_OPERACAO[normalizarChave(tipoOperacaoBruto)];
-    if (!tipoOperacao) problemasLinha.push(`Tipo Operação não reconhecido: "${tipoOperacaoBruto}"`);
-
-    const destino = MAPA_DESTINO[normalizarChave(destinoBruto)];
-    if (!destino) problemasLinha.push(`Destino não reconhecido: "${destinoBruto}"`);
-
-    const destinatario = MAPA_DESTINATARIO[normalizarChave(destinatarioBruto)] ?? "contribuinte";
-
-    if (problemasLinha.length > 0) {
-      erros.push(`Linha ${numeroLinha}: ${problemasLinha.join("; ")}`);
-      return;
-    }
+    const ncmOriginal = textoCelula(linha, m.ncm);
 
     produtos.push({
-      codigo,
-      descricao,
-      ncm,
-      origem,
-      tipoOperacao: tipoOperacao!,
-      destino: destino!,
-      destinatario,
-      stBahia: paraSimNaoVerificar(stBahia),
-      monofasicoPisCofins: paraSimNaoVerificar(monofasico),
-      isentoPisCofins: paraSimNaoVerificar(isento),
-      anexoLc214: paraSimNaoVerificar(anexoLc214),
       linha: numeroLinha,
+      codigo: linha[m.codigo] ?? "",
+      nome: linha[m.nome] ?? "",
+      codigoBarras: linha[m.codigodebarras] ?? "",
+      un: linha[m.un] ?? "",
+      precoUnit: linha[m.precounit] ?? "",
+      aliqFcp: linha[m.aliqfcp] ?? "",
+      tributacao: textoCelula(linha, m.tributacao),
+      ncmOriginal,
+      ncm: ncmOriginal.replace(/\D/g, ""),
+      cfopSaidas: textoCelula(linha, m.cfopsaidas),
+      cstIcms: textoCelula(linha, m.csticms),
+      cstPisCofins: textoCelula(linha, m.cstpiscofins),
+      pis: paraNumeroOuNull(linha[m.pis]),
+      cofins: paraNumeroOuNull(linha[m.cofins]),
+      natReceita: textoCelula(linha, m.natrecieta),
+      cstIbsCbs: textoCelula(linha, m.cstibscbs),
+      cclasstrib: textoCelula(linha, m.cclasstrib),
+      redBc: paraNumeroOuNull(linha[m.redbc]),
+      ibs: paraNumeroOuNull(linha[m.ibs]),
+      cbs: paraNumeroOuNull(linha[m.cbs]),
     });
   });
 
-  return { produtos, erros };
+  if (produtos.length === 0 && erros.length === 0) {
+    erros.push("A planilha não contém linhas de produtos a partir da linha 3.");
+  }
+
+  return { produtos, erros, contexto };
 }
 
-const CABECALHO_SAIDA = [
-  "Código",
-  "Descrição",
-  "NCM",
-  "CFOP",
-  "CFOP - Descrição",
-  "CST PIS",
-  "CST PIS - Descrição",
-  "CST COFINS",
-  "CST COFINS - Descrição",
-  "CST IBS/CBS",
-  "CST IBS/CBS - Descrição",
-  "cClassTrib",
-  "cClassTrib - Descrição",
-  "cClassTrib - Base Legal",
-  "Alertas",
-];
-
-function formatarAlertas(resultado: ProdutoResultado): string {
-  if (resultado.alertas.length === 0) return "";
-  return resultado.alertas
-    .map((a) => `[${a.campo}] ${a.mensagem} (${a.norma})`)
-    .join(" | ");
+function valorParaCelula(campo: string, r: ClientProdutoResultado): string | number {
+  switch (campo) {
+    case "codigo":
+      return r.codigo;
+    case "nome":
+      return r.nome;
+    case "codigoBarras":
+      return r.codigoBarras;
+    case "un":
+      return r.un;
+    case "tributacao":
+      return r.tributacao;
+    case "precoUnit":
+      return r.precoUnit;
+    case "ncm":
+      return r.ncmOriginal;
+    case "cfopSaidas":
+      return r.cfopSaidas;
+    case "aliqFcp":
+      return r.aliqFcp;
+    case "cstIcms":
+      return r.cstIcms;
+    case "cstPisCofins":
+      return r.cstPisCofins;
+    case "pis":
+      return r.pis ?? "";
+    case "cofins":
+      return r.cofins ?? "";
+    case "natReceita":
+      return r.natReceita;
+    case "cstIbsCbs":
+      return r.cstIbsCbs;
+    case "cclasstrib":
+      return r.cclasstrib;
+    case "redBc":
+      return r.redBc ?? "";
+    case "ibs":
+      return r.ibs ?? "";
+    case "cbs":
+      return r.cbs ?? "";
+    default:
+      return "";
+  }
 }
 
-/** Gera o arquivo .xlsx de saída a partir dos resultados classificados. */
-export function gerarPlanilhaResultado(resultados: ProdutoResultado[]): Uint8Array {
-  const linhas = resultados.map((r) => [
-    r.codigo,
-    r.descricao,
-    r.ncm,
-    r.cfop.codigo,
-    r.cfop.descricao,
-    r.cstPis.codigo,
-    r.cstPis.descricao,
-    r.cstCofins.codigo,
-    r.cstCofins.descricao,
-    r.cstIbsCbs.codigo,
-    r.cstIbsCbs.descricao,
-    r.cClassTrib.codigo,
-    r.cClassTrib.descricao,
-    r.cClassTrib.baseLegal,
-    formatarAlertas(r),
-  ]);
+/** Gera o .xlsx de saída no mesmo layout de entrada (título mesclado + cabeçalho intactos), com Status e Observação ao final. */
+export function gerarPlanilhaClienteResultado(
+  resultados: ClientProdutoResultado[],
+  contexto: PlanilhaClienteContexto
+): ArrayBuffer {
+  const numColunasOriginais = contexto.cabecalhoOriginal.length;
+  const numColunas = numColunasOriginais + 2;
 
-  const aba = XLSX.utils.aoa_to_sheet([CABECALHO_SAIDA, ...linhas]);
-  aba["!cols"] = [
-    { wch: 12 }, // Código
-    { wch: 30 }, // Descrição
-    { wch: 10 }, // NCM
-    { wch: 8 }, // CFOP
-    { wch: 40 }, // CFOP descrição
-    { wch: 8 }, // CST PIS
-    { wch: 40 }, // CST PIS descrição
-    { wch: 10 }, // CST COFINS
-    { wch: 40 }, // CST COFINS descrição
-    { wch: 10 }, // CST IBS/CBS
-    { wch: 30 }, // CST IBS/CBS descrição
-    { wch: 10 }, // cClassTrib
-    { wch: 40 }, // cClassTrib descrição
-    { wch: 40 }, // cClassTrib base legal
-    { wch: 80 }, // Alertas
-  ];
+  const linhaTitulo: LinhaBruta = new Array(numColunas).fill("");
+  linhaTitulo[0] = contexto.tituloOriginal;
+
+  const linhaCabecalho: LinhaBruta = [...contexto.cabecalhoOriginal, "Status", "Observação"];
+
+  const linhasDados: LinhaBruta[] = resultados.map((r) => {
+    const linha: LinhaBruta = new Array(numColunas).fill("");
+    for (const { chave, campo } of COLUNAS_ESPERADAS) {
+      const indice = contexto.mapaColunas[chave];
+      linha[indice] = valorParaCelula(campo, r);
+    }
+    linha[numColunasOriginais] = r.status;
+    linha[numColunasOriginais + 1] = r.observacao;
+    return linha;
+  });
+
+  const sheet = XLSX.utils.aoa_to_sheet([linhaTitulo, linhaCabecalho, ...linhasDados]);
+  if (contexto.mergeTitulo) {
+    sheet["!merges"] = [contexto.mergeTitulo];
+  }
+  sheet["!cols"] = new Array(numColunas).fill({ wch: 16 });
 
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, aba, "Grade Tributária");
-  return XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as Uint8Array;
+  XLSX.utils.book_append_sheet(workbook, sheet, contexto.nomeAba);
+  return XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
 }

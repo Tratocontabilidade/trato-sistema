@@ -376,6 +376,32 @@ a.link {
   }
 }
 
+.progresso {
+  margin-top: 16px;
+}
+
+.progresso-barra {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--panel-border);
+  overflow: hidden;
+}
+
+.progresso-preenchimento {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 120ms ease;
+}
+
+.progresso-texto {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
 /* ---------- Erros de linha ---------- */
 
 .erros {
@@ -419,6 +445,10 @@ a.link {
   border-color: rgba(224, 161, 58, 0.4);
 }
 
+.resumo-item--danger {
+  border-color: rgba(193, 80, 46, 0.4);
+}
+
 .resumo-valor {
   font-family: var(--font-serif);
   font-size: 1.7rem;
@@ -433,12 +463,58 @@ a.link {
   color: var(--warn);
 }
 
+.resumo-item--danger .resumo-valor {
+  color: var(--danger);
+}
+
 .resumo-rotulo {
   font-size: 0.76rem;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin-top: 2px;
+}
+
+/* ---------- Filtro por status ---------- */
+
+.filtro-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 16px;
+}
+
+button.chip-filtro {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+button.chip-filtro:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+button.chip-filtro--ativo {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ---------- Paginação ---------- */
+
+.paginacao {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 16px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
 }
 
 /* ---------- Tabela ---------- */
@@ -526,6 +602,16 @@ tbody tr:hover {
 .badge--warn {
   background: var(--warn-soft);
   color: var(--warn);
+}
+
+.badge--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.badge--info {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .alertas-cel {

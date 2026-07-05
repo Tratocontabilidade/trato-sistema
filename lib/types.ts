@@ -1,64 +1,57 @@
 // Tipos compartilhados entre lib/rules.ts, lib/tables.ts, lib/excel.ts e a interface.
+//
+// O sistema lê o layout fixo de planilha que os clientes do escritório
+// enviam ("Cadastro de Produtos", 19 colunas) e devolve a mesma planilha
+// com os campos de classificação preenchidos/validados, mais duas colunas
+// de controle (Status e Observação).
 
-export type SimNaoVerificar = "sim" | "nao" | "verificar";
+export type StatusLinha =
+  | "OK"
+  | "Preenchido automaticamente"
+  | "Divergência detectada"
+  | "Revisar manualmente";
 
-export type TipoOperacao =
-  | "venda"
-  | "compra"
-  | "devolucao_compra"
-  | "devolucao_venda"
-  | "transferencia"
-  | "bonificacao_doacao"
-  | "remessa_conserto"
-  | "retorno_conserto";
-
-export type Destino = "interna" | "interestadual" | "exportacao";
-
-export type Destinatario = "consumidor_final" | "contribuinte" | "orgao_publico";
-
-/** Linha lida da planilha de entrada (aba "Produtos"). */
-export interface ProdutoEntrada {
-  codigo: string;
-  descricao: string;
-  ncm: string;
-  origem: string;
-  tipoOperacao: TipoOperacao;
-  destino: Destino;
-  destinatario: Destinatario;
-  stBahia: SimNaoVerificar;
-  monofasicoPisCofins: SimNaoVerificar;
-  isentoPisCofins: SimNaoVerificar;
-  anexoLc214: SimNaoVerificar;
-  /** Linha original da planilha, para mensagens de erro. */
+/**
+ * Linha lida da planilha do cliente, já normalizada.
+ *
+ * Campos de repasse (código, nome, código de barras, UN, preço unit., ALIQ.
+ * FCP) são mantidos como vieram — o motor não os interpreta.
+ *
+ * Campos de classificação (NCM em diante) são normalizados na leitura
+ * (dígitos, largura de código) para que o motor possa comparar e validar.
+ */
+export interface ClientProdutoEntrada {
+  /** Linha da planilha original (1-based, para mensagens de erro). */
   linha: number;
-}
 
-/** Código + descrição de uma classificação fiscal. */
-export interface CodigoDescricao {
-  codigo: string;
-  descricao: string;
-}
+  // Repasse — não interpretados pelo motor.
+  codigo: string | number;
+  nome: string | number;
+  codigoBarras: string | number;
+  un: string | number;
+  precoUnit: string | number;
+  aliqFcp: string | number;
 
-export interface ClassTrib extends CodigoDescricao {
-  baseLegal: string;
-}
-
-export interface Alerta {
-  campo: string;
-  mensagem: string;
-  norma: string;
-}
-
-/** Resultado da classificação de um produto. */
-export interface ProdutoResultado {
-  codigo: string;
-  descricao: string;
+  // Usados pelo motor de classificação.
+  tributacao: string;
+  ncmOriginal: string;
+  /** Apenas dígitos, sem pontuação. Pode ter comprimento diferente de 8 se a planilha vier suja. */
   ncm: string;
-  cfop: CodigoDescricao;
-  cstPis: CodigoDescricao;
-  cstCofins: CodigoDescricao;
-  cstIbsCbs: CodigoDescricao;
-  cClassTrib: ClassTrib;
-  alertas: Alerta[];
-  linha: number;
+  cfopSaidas: string;
+  cstIcms: string;
+  cstPisCofins: string;
+  pis: number | null;
+  cofins: number | null;
+  natReceita: string;
+  cstIbsCbs: string;
+  cclasstrib: string;
+  redBc: number | null;
+  ibs: number | null;
+  cbs: number | null;
+}
+
+/** Linha após passar pelo motor de classificação. */
+export interface ClientProdutoResultado extends ClientProdutoEntrada {
+  status: StatusLinha;
+  observacao: string;
 }

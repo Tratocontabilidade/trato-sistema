@@ -1,21 +1,28 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { classificarProdutos } from "@/lib/rules";
-import { gerarPlanilhaResultado, lerPlanilhaProdutos } from "@/lib/excel";
-import type { ProdutoResultado } from "@/lib/types";
+import { classificarProdutosClienteAsync } from "@/lib/rules";
+import { gerarPlanilhaClienteResultado, lerPlanilhaCliente, type PlanilhaClienteContexto } from "@/lib/excel";
+import type { ClientProdutoResultado } from "@/lib/types";
 import { Selo } from "./components/Selo";
 import { StepIndicator } from "./components/StepIndicator";
 import { UploadArea } from "./components/UploadArea";
 import { ResumoBar } from "./components/ResumoBar";
 import { ResultadoTabela } from "./components/ResultadoTabela";
+import { ProgressBar } from "./components/ProgressBar";
 import { ThemeToggle } from "./components/ThemeToggle";
 
 type Estado =
   | { fase: "vazio" }
-  | { fase: "processando" }
+  | { fase: "processando"; processados: number; total: number }
   | { fase: "erro"; mensagem: string }
-  | { fase: "pronto"; resultados: ProdutoResultado[]; erros: string[]; nomeArquivo: string };
+  | {
+      fase: "pronto";
+      resultados: ClientProdutoResultado[];
+      erros: string[];
+      contexto: PlanilhaClienteContexto;
+      nomeArquivo: string;
+    };
 
 function etapaAtual(estado: Estado): 1 | 2 | 3 {
   if (estado.fase === "pronto") return 3;
@@ -29,17 +36,36 @@ export default function Page() {
   const resumo = useMemo(() => {
     if (estado.fase !== "pronto") return null;
     const total = estado.resultados.length;
-    const comAlerta = estado.resultados.filter((r) => r.alertas.length > 0).length;
-    return { total, comAlerta, semAlerta: total - comAlerta };
+    let ok = 0;
+    let preenchidos = 0;
+    let revisar = 0;
+    let divergentes = 0;
+    for (const r of estado.resultados) {
+      if (r.status === "OK") ok++;
+      else if (r.status === "Preenchido automaticamente") preenchidos++;
+      else if (r.status === "Revisar manualmente") revisar++;
+      else if (r.status === "Divergência detectada") divergentes++;
+    }
+    return { total, ok, preenchidos, revisar, divergentes };
   }, [estado]);
 
   async function processarArquivo(arquivo: File) {
-    setEstado({ fase: "processando" });
+    setEstado({ fase: "processando", processados: 0, total: 0 });
     try {
       const buffer = await arquivo.arrayBuffer();
-      const { produtos, erros } = lerPlanilhaProdutos(buffer);
-      const resultados = classificarProdutos(produtos);
-      setEstado({ fase: "pronto", resultados, erros, nomeArquivo: arquivo.name });
+      const { produtos, erros, contexto } = lerPlanilhaCliente(buffer);
+
+      if (!contexto) {
+        setEstado({ fase: "erro", mensagem: erros.join(" ") });
+        return;
+      }
+
+      setEstado({ fase: "processando", processados: 0, total: produtos.length });
+      const resultados = await classificarProdutosClienteAsync(produtos, {
+        onProgresso: ({ processados, total }) => setEstado({ fase: "processando", processados, total }),
+      });
+
+      setEstado({ fase: "pronto", resultados, erros, contexto, nomeArquivo: arquivo.name });
     } catch (e) {
       setEstado({
         fase: "erro",
@@ -50,14 +76,14 @@ export default function Page() {
 
   function baixarResultado() {
     if (estado.fase !== "pronto") return;
-    const bytes = gerarPlanilhaResultado(estado.resultados);
+    const bytes = gerarPlanilhaClienteResultado(estado.resultados, estado.contexto);
     const blob = new Blob([bytes], {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `grade-tributaria-${estado.nomeArquivo.replace(/\.xlsx?$/i, "")}.xlsx`;
+    a.download = `classificado-${estado.nomeArquivo.replace(/\.xlsx?$/i, "")}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -74,23 +100,18 @@ export default function Page() {
         <ThemeToggle />
       </div>
       <p className="subtitle">
-        Classificação de CFOP, CST de PIS/COFINS e CST/cClassTrib de IBS/CBS para revenda
-        estabelecida na Bahia (Lucro Real/Presumido).
+        Classificação fiscal do "Cadastro de Produtos" — preenche automaticamente CFOP, CST, PIS/COFINS
+        e CST/cClassTrib de IBS/CBS, e valida os campos já preenchidos.
       </p>
 
       <StepIndicator atual={etapaAtual(estado)} />
 
       <div className="disclaimer">
         Este sistema apoia o trabalho do analista fiscal, mas <strong>não substitui a revisão
-        técnica</strong> antes da emissão de documentos fiscais. As classificações marcadas com
-        alerta exigem confirmação humana. A tabela de cClassTrib do IBS/CBS muda com frequência —
+        técnica</strong> antes da emissão de documentos fiscais. Linhas com status diferente de "OK"
+        exigem confirmação humana antes do uso. A tabela de cClassTrib do IBS/CBS muda com frequência —
         confirme sempre a versão vigente do Informe Técnico NF-e no{" "}
-        <a
-          className="link"
-          href="https://www.nfe.fazenda.gov.br"
-          target="_blank"
-          rel="noreferrer"
-        >
+        <a className="link" href="https://www.nfe.fazenda.gov.br" target="_blank" rel="noreferrer">
           Portal Nacional da NF-e
         </a>
         .
@@ -101,16 +122,14 @@ export default function Page() {
           <UploadArea onFile={processarArquivo} disabled={estado.fase === "processando"} />
 
           <div className="actions-row">
-            {estado.fase === "processando" && (
-              <span className="processando">
-                <span className="spinner" aria-hidden="true" />
-                Classificando produtos…
-              </span>
-            )}
             <a className="link" href="/planilha-modelo.xlsx" download style={{ marginLeft: "auto" }}>
               Baixar planilha-modelo
             </a>
           </div>
+
+          {estado.fase === "processando" && (
+            <ProgressBar processados={estado.processados} total={estado.total} />
+          )}
 
           {estado.fase === "erro" && (
             <div className="erros">Erro ao processar a planilha: {estado.mensagem}</div>
@@ -121,7 +140,7 @@ export default function Page() {
       {estado.fase === "pronto" && (
         <>
           <div className="actions-row">
-            <button onClick={baixarResultado}>Baixar resultado (.xlsx)</button>
+            <button onClick={baixarResultado}>Baixar planilha classificada</button>
             <button className="secondary" onClick={limpar}>
               Nova planilha
             </button>
@@ -129,7 +148,7 @@ export default function Page() {
 
           {estado.erros.length > 0 && (
             <div className="erros">
-              {estado.erros.length} linha(s) não puderam ser classificadas e foram ignoradas:
+              {estado.erros.length} aviso(s) na leitura da planilha:
               <ul>
                 {estado.erros.map((erro, i) => (
                   <li key={i}>{erro}</li>
