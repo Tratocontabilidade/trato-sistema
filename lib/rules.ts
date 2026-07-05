@@ -9,13 +9,25 @@
 // esperado). Se estiver em branco, preenche com base no Padrão A/B (conforme
 // a coluna Tributação) e nas sobrescritas por NCM em lib/tables.ts. Linhas
 // "Não tributado"/"Isento" nunca são preenchidas automaticamente.
+//
+// Regra de ouro: qualquer ambiguidade (segmento excluído por instrução,
+// NCM marcado como ambíguo em lib/tables.ts, Tributação não reconhecida
+// combinada a instrução também não reconhecida) nunca é "chutada" — a
+// linha volta com os campos de classificação em branco e Status "Dúvida —
+// aguardando instrução", citando o motivo.
 
 import {
   PADRAO_TRIBUTADO,
+  PADRAO_TRIBUTADO_CUMULATIVO,
   PADRAO_ST,
+  PADRAO_ST_CUMULATIVO,
   buscarOverridePorNcm,
 } from "./tables";
-import type { ClientProdutoEntrada, ClientProdutoResultado, StatusLinha } from "./types";
+import { produtoPertenceAoSegmento, type Diretiva } from "./instructions";
+import { buscarNoAnexo } from "./anexos";
+import type { ClientProdutoEntrada, ClientProdutoResultado, ContextoClassificacao, StatusLinha } from "./types";
+
+const CONTEXTO_PADRAO: ContextoClassificacao = { regime: "nao_cumulativo", diretivas: [] };
 
 type Categoria = "tributado" | "st" | "isento_nao_tributado" | "desconhecido";
 
@@ -172,7 +184,48 @@ function pesoParaStatus(peso: number): StatusLinha {
   return "OK";
 }
 
-export function classificarProdutoCliente(input: ClientProdutoEntrada): ClientProdutoResultado {
+/**
+ * Constrói o resultado "dúvida": nenhum campo de classificação é
+ * preenchido, e a Observação explica exatamente o que impediu a
+ * classificação automática. Usado sempre que a regra de ouro se aplica
+ * (segmento excluído por instrução, NCM ambíguo em lib/tables.ts etc).
+ */
+function construirResultadoDuvida(input: ClientProdutoEntrada, motivo: string): ClientProdutoResultado {
+  return {
+    ...input,
+    cfopSaidas: "",
+    cstIcms: "",
+    cstPisCofins: "",
+    pis: null,
+    cofins: null,
+    natReceita: "",
+    cstIbsCbs: "",
+    cclasstrib: "",
+    redBc: null,
+    ibs: null,
+    cbs: null,
+    status: "Dúvida — aguardando instrução",
+    observacao: motivo,
+  };
+}
+
+export function classificarProdutoCliente(
+  input: ClientProdutoEntrada,
+  contexto: ContextoClassificacao = CONTEXTO_PADRAO
+): ClientProdutoResultado {
+  const nomeNormalizado = normalizarChaveTexto(String(input.nome ?? ""));
+
+  const diretivaExcluir = contexto.diretivas.find(
+    (d): d is Extract<Diretiva, { tipo: "excluir_segmento" }> =>
+      d.tipo === "excluir_segmento" && produtoPertenceAoSegmento(nomeNormalizado, d.chave)
+  );
+  if (diretivaExcluir) {
+    return construirResultadoDuvida(
+      input,
+      `Instrução do processamento: empresa não trabalha com ${diretivaExcluir.rotulo} — produto identificado nesse segmento pelo Nome.`
+    );
+  }
+
   const pendencias: Pendencia[] = [];
   let algumAutofill = false;
 
@@ -187,8 +240,25 @@ export function classificarProdutoCliente(input: ClientProdutoEntrada): ClientPr
     });
   }
 
-  const categoria = categorizarTributacao(input.tributacao);
-  if (categoria === "desconhecido") {
+  // NCM sabidamente ambíguo (lib/tables.ts): nunca classificar automaticamente.
+  if (ncmValido) {
+    const possivelAmbiguo = buscarOverridePorNcm(ncmDigitos);
+    if (possivelAmbiguo?.ambiguo) {
+      return construirResultadoDuvida(input, possivelAmbiguo.observacao);
+    }
+  }
+
+  const diretivaPadrao = contexto.diretivas.find(
+    (d): d is Extract<Diretiva, { tipo: "forcar_padrao" }> => d.tipo === "forcar_padrao"
+  );
+  let categoria = categorizarTributacao(input.tributacao);
+  if (diretivaPadrao) {
+    categoria = diretivaPadrao.padrao === "isento" ? "isento_nao_tributado" : diretivaPadrao.padrao;
+    pendencias.push({
+      peso: 0,
+      mensagem: `Padrão forçado pela instrução do processamento: "todos os produtos são ${diretivaPadrao.padrao}".`,
+    });
+  } else if (categoria === "desconhecido") {
     pendencias.push({ peso: 3, mensagem: `Tributação "${input.tributacao || "(vazia)"}" não reconhecida.` });
   }
   const bloquearAutofill = categoria === "isento_nao_tributado";
@@ -199,11 +269,83 @@ export function classificarProdutoCliente(input: ClientProdutoEntrada): ClientPr
     });
   }
 
-  const padraoBase = categoria === "st" ? PADRAO_ST : categoria === "tributado" ? PADRAO_TRIBUTADO : null;
+  // Anexos ativos da empresa (Bloco 3) decidem ST por NCM, com prioridade sobre a coluna
+  // Tributação — mas só quando o produto já é tributável (não se aplica a isento/desconhecido).
+  const anexosAtivos = (contexto.anexosAtivos ?? []).filter((a) => a.ativo);
+  const ncmNoAnexo = anexosAtivos.length > 0 && ncmValido ? buscarNoAnexo(ncmDigitos, anexosAtivos) : null;
+  if (ncmNoAnexo !== null && (categoria === "tributado" || categoria === "st")) {
+    if (ncmNoAnexo && categoria !== "st") {
+      pendencias.push({ peso: 0, mensagem: "ST determinada pelo anexo ativo da empresa (NCM encontrado)." });
+      categoria = "st";
+    } else if (!ncmNoAnexo && categoria === "st") {
+      pendencias.push({
+        peso: 0,
+        mensagem: "NCM não consta em nenhum anexo ativo da empresa — tratado como tributado normal (sem ST).",
+      });
+      categoria = "tributado";
+    }
+  }
+
+  // Validação cruzada: CFOP já preenchido pelo cliente indicando ST/normal em desacordo com o anexo.
+  if (ncmNoAnexo !== null && estaPreenchido(input.cfopSaidas)) {
+    const cfopDigitos = String(input.cfopSaidas).replace(/\D/g, "");
+    if (cfopDigitos === "5405" && !ncmNoAnexo) {
+      pendencias.push({
+        peso: 2,
+        mensagem: "CFOP informado indica Substituição Tributária (5405), mas o NCM não consta em nenhum anexo ativo da empresa.",
+      });
+    } else if (cfopDigitos === "5102" && ncmNoAnexo) {
+      pendencias.push({
+        peso: 2,
+        mensagem: "CFOP informado indica tributação normal (5102), mas o NCM consta em anexo ativo da empresa como ST.",
+      });
+    }
+  }
+
+  const cumulativo = contexto.regime === "cumulativo";
+  const padraoBase =
+    categoria === "st"
+      ? cumulativo
+        ? PADRAO_ST_CUMULATIVO
+        : PADRAO_ST
+      : categoria === "tributado"
+        ? cumulativo
+          ? PADRAO_TRIBUTADO_CUMULATIVO
+          : PADRAO_TRIBUTADO
+        : null;
   // Sobrescritas por NCM só se aplicam sobre um padrão de Tributação existente.
   const override = padraoBase && ncmValido ? buscarOverridePorNcm(ncmDigitos) : undefined;
   if (override) {
     pendencias.push({ peso: 0, mensagem: `Sobrescrita por NCM aplicada: ${override.observacao}` });
+  }
+
+  const diretivaReducao = contexto.diretivas.find(
+    (d): d is Extract<Diretiva, { tipo: "reducao_segmento" }> =>
+      d.tipo === "reducao_segmento" && produtoPertenceAoSegmento(nomeNormalizado, d.chave)
+  );
+  if (diretivaReducao) {
+    pendencias.push({
+      peso: 0,
+      mensagem: `Redução de ${diretivaReducao.percentual}% aplicada pela instrução do processamento (segmento ${diretivaReducao.rotulo}).`,
+    });
+  }
+
+  // Regras aprendidas da empresa (Bloco 5): maior prioridade de todas, por NCM+campo exato.
+  // Só entram em produção depois de aprovação humana explícita (ver RevisaoAprendizado.tsx).
+  const regrasNcm = ncmValido ? (contexto.regrasAprendidas ?? []).filter((r) => r.ncm === ncmDigitos) : [];
+  function regraAprendida(campo: string): string | undefined {
+    const regra = regrasNcm.find((r) => r.campo === campo);
+    if (regra) {
+      pendencias.push({
+        peso: 0,
+        mensagem: `Regra aprendida aplicada para ${campo} (${regra.origem}).`,
+      });
+    }
+    return regra?.valorNovo;
+  }
+  function regraAprendidaNumero(campo: string): number | undefined {
+    const v = regraAprendida(campo);
+    return v === undefined ? undefined : Number(v);
   }
 
   function campoCodigo(
@@ -240,26 +382,43 @@ export function classificarProdutoCliente(input: ClientProdutoEntrada): ClientPr
     return r.valor;
   }
 
-  const cfopSaidas = campoCodigo("CFOP SAIDAS", input.cfopSaidas, 4, padraoBase?.cfopSaidas);
-  const cstIcms = campoCodigo("CST ICMS", input.cstIcms, 3, padraoBase?.cstIcms);
+  const cfopSaidas = campoCodigo("CFOP SAIDAS", input.cfopSaidas, 4, regraAprendida("cfopSaidas") ?? padraoBase?.cfopSaidas);
+  const cstIcms = campoCodigo("CST ICMS", input.cstIcms, 3, regraAprendida("cstIcms") ?? padraoBase?.cstIcms);
   const cstPisCofins = campoCodigo(
     "CST PIS/COFINS",
     input.cstPisCofins,
     2,
-    override?.cstPisCofins ?? padraoBase?.cstPisCofins
+    regraAprendida("cstPisCofins") ?? override?.cstPisCofins ?? padraoBase?.cstPisCofins
   );
-  const pis = campoNumero("PIS", input.pis, override?.pis ?? padraoBase?.pis);
-  const cofins = campoNumero("COFINS", input.cofins, override?.cofins ?? padraoBase?.cofins);
-  const natReceita = campoTexto("NAT. RECEITA", input.natReceita, override?.natReceita ?? padraoBase?.natReceita);
-  const cstIbsCbs = campoCodigo("CST IBS/CBS", input.cstIbsCbs, 3, override?.cstIbsCbs ?? padraoBase?.cstIbsCbs);
+  const pis = campoNumero("PIS", input.pis, regraAprendidaNumero("pis") ?? override?.pis ?? padraoBase?.pis);
+  const cofins = campoNumero(
+    "COFINS",
+    input.cofins,
+    regraAprendidaNumero("cofins") ?? override?.cofins ?? padraoBase?.cofins
+  );
+  const natReceita = campoTexto(
+    "NAT. RECEITA",
+    input.natReceita,
+    regraAprendida("natReceita") ?? override?.natReceita ?? padraoBase?.natReceita
+  );
+  const cstIbsCbs = campoCodigo(
+    "CST IBS/CBS",
+    input.cstIbsCbs,
+    3,
+    regraAprendida("cstIbsCbs") ?? override?.cstIbsCbs ?? padraoBase?.cstIbsCbs
+  );
   const cclasstrib = campoCodigo(
     "Cclasstrib",
     input.cclasstrib,
     6,
-    override?.cclasstrib ?? padraoBase?.cclasstrib,
+    regraAprendida("cclasstrib") ?? override?.cclasstrib ?? padraoBase?.cclasstrib,
     true
   );
-  const redBc = campoNumero("RED. B.C.", input.redBc, override?.redBc ?? padraoBase?.redBc);
+  const redBc = campoNumero(
+    "RED. B.C.",
+    input.redBc,
+    regraAprendidaNumero("redBc") ?? diretivaReducao?.percentual ?? override?.redBc ?? padraoBase?.redBc
+  );
   const ibs = campoNumero("IBS", input.ibs, padraoBase?.ibs);
   const cbs = campoNumero("CBS", input.cbs, padraoBase?.cbs);
 
@@ -297,15 +456,20 @@ export interface ProgressoClassificacao {
  */
 export async function classificarProdutosClienteAsync(
   entradas: ClientProdutoEntrada[],
-  opts?: { tamanhoLote?: number; onProgresso?: (p: ProgressoClassificacao) => void }
+  opts?: {
+    tamanhoLote?: number;
+    contexto?: ContextoClassificacao;
+    onProgresso?: (p: ProgressoClassificacao) => void;
+  }
 ): Promise<ClientProdutoResultado[]> {
   const tamanhoLote = opts?.tamanhoLote ?? 2000;
+  const contexto = opts?.contexto ?? CONTEXTO_PADRAO;
   const resultados: ClientProdutoResultado[] = new Array(entradas.length);
 
   for (let inicio = 0; inicio < entradas.length; inicio += tamanhoLote) {
     const fim = Math.min(inicio + tamanhoLote, entradas.length);
     for (let i = inicio; i < fim; i++) {
-      resultados[i] = classificarProdutoCliente(entradas[i]);
+      resultados[i] = classificarProdutoCliente(entradas[i], contexto);
     }
     opts?.onProgresso?.({ processados: fim, total: entradas.length });
     await new Promise((resolve) => setTimeout(resolve, 0));

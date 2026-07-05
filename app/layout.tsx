@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Fraunces, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
+import { NavBar } from "./components/NavBar";
 import "./globals.css";
 
 const fraunces = Fraunces({
@@ -46,6 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="pt-BR" className={`${fraunces.variable} ${plexSans.variable} ${plexMono.variable}`}>
       <body>
         <script dangerouslySetInnerHTML={{ __html: TEMA_INIT_SCRIPT }} />
+        <NavBar />
         {children}
       </body>
     </html>
