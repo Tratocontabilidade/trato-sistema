@@ -9,6 +9,7 @@ import { StepIndicator } from "./components/StepIndicator";
 import { UploadArea } from "./components/UploadArea";
 import { ResumoBar } from "./components/ResumoBar";
 import { ResultadoTabela } from "./components/ResultadoTabela";
+import { ThemeToggle } from "./components/ThemeToggle";
 
 type Estado =
   | { fase: "vazio" }
@@ -70,6 +71,7 @@ export default function Page() {
       <div className="app-header">
         <Selo size={32} className="app-header-selo" title="Grade Tributária BA" />
         <h1>Grade Tributária BA</h1>
+        <ThemeToggle />
       </div>
       <p className="subtitle">
         Classificação de CFOP, CST de PIS/COFINS e CST/cClassTrib de IBS/CBS para revenda

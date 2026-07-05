@@ -29,10 +29,25 @@ export const metadata: Metadata = {
     "Classificação de CFOP, CST de PIS/COFINS e CST/cClassTrib de IBS/CBS para revenda na Bahia.",
 };
 
+const TEMA_INIT_SCRIPT = `
+(function () {
+  try {
+    var salvo = localStorage.getItem("theme");
+    var tema = salvo === "light" || salvo === "dark"
+      ? salvo
+      : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    document.documentElement.setAttribute("data-theme", tema);
+  } catch (e) {}
+})();
+`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pt-BR" className={`${fraunces.variable} ${plexSans.variable} ${plexMono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <script dangerouslySetInnerHTML={{ __html: TEMA_INIT_SCRIPT }} />
+        {children}
+      </body>
     </html>
   );
 }
