@@ -1,3 +1,4 @@
+/* Tema escuro (padrão) */
 :root {
   --bg: #0e1b2b;
   --panel: #16283d;
@@ -7,6 +8,7 @@
   --accent: #c9a227;
   --accent-hover: #ddb43a;
   --accent-soft: rgba(201, 162, 39, 0.14);
+  --on-accent: #1b2a3a;
   --ok: #2fa593;
   --ok-soft: rgba(47, 165, 147, 0.15);
   --warn: #e0a13a;
@@ -21,8 +23,62 @@
   --transition: 160ms ease;
 }
 
+/* Tema claro — aplicado via atributo (definido por script de inicialização
+   e pelo ThemeToggle) ou, na ausência de preferência salva, pela cor do
+   sistema operacional. */
+:root[data-theme="light"] {
+  --bg: #f4efe6;
+  --panel: #ffffff;
+  --panel-border: #e3dcc9;
+  --text: #1b2a3a;
+  --text-muted: rgba(27, 42, 58, 0.62);
+  --accent-hover: #b58f1e;
+  --accent-soft: rgba(201, 162, 39, 0.12);
+  --ok: #237b6e;
+  --ok-soft: rgba(47, 165, 147, 0.14);
+  --warn: #916825;
+  --warn-soft: rgba(224, 161, 58, 0.16);
+  --danger-soft: rgba(193, 80, 46, 0.12);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #f4efe6;
+    --panel: #ffffff;
+    --panel-border: #e3dcc9;
+    --text: #1b2a3a;
+    --text-muted: rgba(27, 42, 58, 0.62);
+    --accent-hover: #b58f1e;
+    --accent-soft: rgba(201, 162, 39, 0.12);
+    --ok: #237b6e;
+    --ok-soft: rgba(47, 165, 147, 0.14);
+    --warn: #916825;
+    --warn-soft: rgba(224, 161, 58, 0.16);
+    --danger-soft: rgba(193, 80, 46, 0.12);
+  }
+}
+
 * {
   box-sizing: border-box;
+}
+
+body,
+.card,
+.disclaimer,
+.upload-area,
+.resumo-item,
+table,
+th,
+td,
+.chip,
+.badge,
+button,
+.step-marcador,
+.step-linha,
+footer,
+.tabela-wrap,
+.erros {
+  transition: background-color var(--transition), color var(--transition), border-color var(--transition);
 }
 
 html,
@@ -64,6 +120,27 @@ h2 {
 .app-header h1 {
   font-size: 1.7rem;
   margin: 0;
+}
+
+button.theme-toggle {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+button.theme-toggle:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 p.subtitle {
@@ -237,7 +314,7 @@ p.subtitle {
 
 button {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--on-accent);
   border: none;
   border-radius: var(--radius-sm);
   padding: 10px 18px;
