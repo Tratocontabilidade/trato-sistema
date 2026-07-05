@@ -1,9 +1,14 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { classificarProdutos } from "@/lib/rules";
 import { gerarPlanilhaResultado, lerPlanilhaProdutos } from "@/lib/excel";
 import type { ProdutoResultado } from "@/lib/types";
+import { Selo } from "./components/Selo";
+import { StepIndicator } from "./components/StepIndicator";
+import { UploadArea } from "./components/UploadArea";
+import { ResumoBar } from "./components/ResumoBar";
+import { ResultadoTabela } from "./components/ResultadoTabela";
 
 type Estado =
   | { fase: "vazio" }
@@ -11,9 +16,14 @@ type Estado =
   | { fase: "erro"; mensagem: string }
   | { fase: "pronto"; resultados: ProdutoResultado[]; erros: string[]; nomeArquivo: string };
 
+function etapaAtual(estado: Estado): 1 | 2 | 3 {
+  if (estado.fase === "pronto") return 3;
+  if (estado.fase === "processando") return 2;
+  return 1;
+}
+
 export default function Page() {
   const [estado, setEstado] = useState<Estado>({ fase: "vazio" });
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const resumo = useMemo(() => {
     if (estado.fase !== "pronto") return null;
@@ -53,16 +63,20 @@ export default function Page() {
 
   function limpar() {
     setEstado({ fase: "vazio" });
-    if (inputRef.current) inputRef.current.value = "";
   }
 
   return (
     <main>
-      <h1>Grade Tributária BA</h1>
+      <div className="app-header">
+        <Selo size={32} className="app-header-selo" title="Grade Tributária BA" />
+        <h1>Grade Tributária BA</h1>
+      </div>
       <p className="subtitle">
         Classificação de CFOP, CST de PIS/COFINS e CST/cClassTrib de IBS/CBS para revenda
         estabelecida na Bahia (Lucro Real/Presumido).
       </p>
+
+      <StepIndicator atual={etapaAtual(estado)} />
 
       <div className="disclaimer">
         Este sistema apoia o trabalho do analista fiscal, mas <strong>não substitui a revisão
@@ -80,114 +94,52 @@ export default function Page() {
         .
       </div>
 
-      <div className="card">
-        <div className="upload-row">
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".xlsx,.xls"
-            disabled={estado.fase === "processando"}
-            onChange={(e) => {
-              const arquivo = e.target.files?.[0];
-              if (arquivo) processarArquivo(arquivo);
-            }}
-          />
-          {estado.fase === "processando" && <span>Processando…</span>}
-          {estado.fase === "pronto" && (
-            <>
-              <button onClick={baixarResultado}>Baixar resultado (.xlsx)</button>
-              <button className="secondary" onClick={limpar}>
-                Nova planilha
-              </button>
-            </>
-          )}
-          <a className="link" href="/planilha-modelo.xlsx" download style={{ marginLeft: "auto" }}>
-            Baixar planilha-modelo
-          </a>
-        </div>
+      {estado.fase !== "pronto" && (
+        <div className="card">
+          <UploadArea onFile={processarArquivo} disabled={estado.fase === "processando"} />
 
-        {estado.fase === "erro" && (
-          <div className="erros">Erro ao processar a planilha: {estado.mensagem}</div>
-        )}
-
-        {estado.fase === "pronto" && estado.erros.length > 0 && (
-          <div className="erros">
-            {estado.erros.length} linha(s) não puderam ser classificadas e foram ignoradas:
-            <ul>
-              {estado.erros.map((erro, i) => (
-                <li key={i}>{erro}</li>
-              ))}
-            </ul>
+          <div className="actions-row">
+            {estado.fase === "processando" && (
+              <span className="processando">
+                <span className="spinner" aria-hidden="true" />
+                Classificando produtos…
+              </span>
+            )}
+            <a className="link" href="/planilha-modelo.xlsx" download style={{ marginLeft: "auto" }}>
+              Baixar planilha-modelo
+            </a>
           </div>
-        )}
-      </div>
+
+          {estado.fase === "erro" && (
+            <div className="erros">Erro ao processar a planilha: {estado.mensagem}</div>
+          )}
+        </div>
+      )}
 
       {estado.fase === "pronto" && (
         <>
-          <div className="resumo">
-            <div className="item">
-              <div className="valor">{resumo?.total}</div>
-              <div className="rotulo">Produtos classificados</div>
-            </div>
-            <div className="item">
-              <div className="valor">{resumo?.semAlerta}</div>
-              <div className="rotulo">Sem alerta</div>
-            </div>
-            <div className="item">
-              <div className="valor">{resumo?.comAlerta}</div>
-              <div className="rotulo">Com alerta (revisar)</div>
-            </div>
+          <div className="actions-row">
+            <button onClick={baixarResultado}>Baixar resultado (.xlsx)</button>
+            <button className="secondary" onClick={limpar}>
+              Nova planilha
+            </button>
           </div>
 
-          <h2>Resultado</h2>
-          <div className="tabela-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Código</th>
-                  <th>Descrição</th>
-                  <th>NCM</th>
-                  <th>CFOP</th>
-                  <th>CST PIS</th>
-                  <th>CST COFINS</th>
-                  <th>CST IBS/CBS</th>
-                  <th>cClassTrib</th>
-                  <th>Status</th>
-                  <th>Alertas</th>
-                </tr>
-              </thead>
-              <tbody>
-                {estado.resultados.map((r) => (
-                  <tr key={`${r.linha}-${r.codigo}`} className={r.alertas.length > 0 ? "linha-com-alerta" : ""}>
-                    <td>{r.codigo}</td>
-                    <td>{r.descricao}</td>
-                    <td>{r.ncm}</td>
-                    <td title={r.cfop.descricao}>{r.cfop.codigo}</td>
-                    <td title={r.cstPis.descricao}>{r.cstPis.codigo}</td>
-                    <td title={r.cstCofins.descricao}>{r.cstCofins.codigo}</td>
-                    <td title={r.cstIbsCbs.descricao}>{r.cstIbsCbs.codigo}</td>
-                    <td title={`${r.cClassTrib.descricao} — ${r.cClassTrib.baseLegal}`}>
-                      {r.cClassTrib.codigo}
-                    </td>
-                    <td>
-                      {r.alertas.length > 0 ? (
-                        <span className="badge warn">revisar</span>
-                      ) : (
-                        <span className="badge ok">ok</span>
-                      )}
-                    </td>
-                    <td className="alertas-cel">
-                      {r.alertas.map((a, i) => (
-                        <div key={i}>
-                          [{a.campo}] {a.mensagem} ({a.norma})
-                        </div>
-                      ))}
-                    </td>
-                  </tr>
+          {estado.erros.length > 0 && (
+            <div className="erros">
+              {estado.erros.length} linha(s) não puderam ser classificadas e foram ignoradas:
+              <ul>
+                {estado.erros.map((erro, i) => (
+                  <li key={i}>{erro}</li>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </ul>
+            </div>
+          )}
+
+          {resumo && <ResumoBar {...resumo} />}
+
+          <h2>Resultado</h2>
+          <ResultadoTabela resultados={estado.resultados} />
         </>
       )}
 
