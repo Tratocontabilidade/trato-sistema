@@ -1,331 +1,315 @@
-// Motor de decisão fiscal — Grade Tributária BA.
+// Motor de classificação fiscal — layout fixo "Cadastro de Produtos".
 //
-// Este módulo não depende da interface (app/). Recebe um `ProdutoEntrada` já
-// normalizado (ver lib/excel.ts) e devolve um `ProdutoResultado` com CFOP,
-// CST de PIS/COFINS, CST de IBS/CBS, cClassTrib e a lista de alertas.
+// Este módulo não depende da interface (app/). Recebe linhas já lidas da
+// planilha do cliente (ver lib/excel.ts) e devolve, para cada uma, os campos
+// de classificação preenchidos ou validados, com Status e Observação.
 //
-// Princípio geral: nunca cravar uma classificação sensível (ST, monofasia,
-// benefício fiscal, imunidade) sem confirmação explícita ("sim"/"nao"). Campos
-// "verificar" ou vazios recebem a classificação padrão mais conservadora e um
-// alerta citando a norma que motiva a dúvida.
+// Princípio geral: se a linha já veio classificada pelo cliente, o motor
+// NUNCA sobrescreve — só valida (formato do código e coerência com o padrão
+// esperado). Se estiver em branco, preenche com base no Padrão A/B (conforme
+// a coluna Tributação) e nas sobrescritas por NCM em lib/tables.ts. Linhas
+// "Não tributado"/"Isento" nunca são preenchidas automaticamente.
 
 import {
-  CFOP,
-  CFOP_EXPORTACAO,
-  CFOP_IMPORTACAO,
-  CST_PIS_COFINS,
-  CST_IBS_CBS,
-  CCLASSTRIB_PADRAO,
+  PADRAO_TRIBUTADO,
+  PADRAO_ST,
+  buscarOverridePorNcm,
 } from "./tables";
-import type {
-  Alerta,
-  ClassTrib,
-  CodigoDescricao,
-  ProdutoEntrada,
-  ProdutoResultado,
-  TipoOperacao,
-} from "./types";
+import type { ClientProdutoEntrada, ClientProdutoResultado, StatusLinha } from "./types";
 
-const NORMA_ST_BAHIA = "RICMS-BA (Decreto nº 13.780/2012), Anexo I — Substituição Tributária";
-const NORMA_PIS_COFINS = "Lei nº 10.637/2002; Lei nº 10.833/2003; IN RFB nº 2.121/2022";
-const NORMA_LC214 = "LC nº 214/2025; Informe Técnico NF-e 2025.002 (Portal Nacional da NF-e)";
+type Categoria = "tributado" | "st" | "isento_nao_tributado" | "desconhecido";
 
-const OPERACOES_SAIDA: ReadonlySet<TipoOperacao> = new Set([
-  "venda",
-  "devolucao_compra",
-  "transferencia",
-  "bonificacao_doacao",
-  "remessa_conserto",
-  "retorno_conserto",
-]);
+interface Pendencia {
+  peso: number;
+  mensagem: string;
+}
 
-/** Operações que possuem uma variante de CFOP específica para Substituição Tributária. */
-const OPERACOES_COM_VARIANTE_ST: ReadonlySet<TipoOperacao> = new Set([
-  "venda",
-  "compra",
-  "devolucao_compra",
-  "transferencia",
-]);
+function normalizarChaveTexto(v: string): string {
+  return v
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
 
-function direcao(tipo: TipoOperacao): "saida" | "entrada" {
-  return OPERACOES_SAIDA.has(tipo) ? "saida" : "entrada";
+function categorizarTributacao(valor: string): Categoria {
+  const chave = normalizarChaveTexto(valor ?? "");
+  if (!chave) return "desconhecido";
+  if (chave.includes("substitui")) return "st";
+  if (chave.includes("isento") || chave.includes("nao tributado")) return "isento_nao_tributado";
+  if (chave.includes("tributad")) return "tributado";
+  return "desconhecido";
+}
+
+function estaPreenchido(valor: string | number | null | undefined): boolean {
+  return valor !== null && valor !== undefined && String(valor).trim() !== "";
+}
+
+interface ResultadoCampoCodigo {
+  valor: string;
+  pendencia?: Pendencia;
+  autopreenchido?: boolean;
+}
+
+function processarCampoCodigo(opts: {
+  nomeCampo: string;
+  bruto: string;
+  digitosEsperados: number;
+  esperado: string | undefined;
+  bloquearAutofill: boolean;
+  sempreAlertarDivergenciaDigitos?: boolean;
+}): ResultadoCampoCodigo {
+  const { nomeCampo, bruto, digitosEsperados, esperado, bloquearAutofill, sempreAlertarDivergenciaDigitos } = opts;
+
+  if (!estaPreenchido(bruto)) {
+    if (bloquearAutofill || esperado === undefined) return { valor: "" };
+    return { valor: esperado, autopreenchido: true };
+  }
+
+  const soDigitos = String(bruto).replace(/\D/g, "");
+  if (soDigitos.length === 0) {
+    return {
+      valor: String(bruto).trim(),
+      pendencia: { peso: 2, mensagem: `${nomeCampo} "${bruto}" não é um código numérico válido.` },
+    };
+  }
+
+  const excedeu = soDigitos.length > digitosEsperados;
+  const digitosOk = soDigitos.length === digitosEsperados;
+  const valorNormalizado = excedeu ? String(bruto).trim() : soDigitos.padStart(digitosEsperados, "0");
+
+  if (excedeu || (sempreAlertarDivergenciaDigitos && !digitosOk)) {
+    return {
+      valor: valorNormalizado,
+      pendencia: {
+        peso: 2,
+        mensagem: `${nomeCampo} "${bruto}" tem ${soDigitos.length} dígito(s) (esperado ${digitosEsperados}).`,
+      },
+    };
+  }
+
+  if (esperado !== undefined && !bloquearAutofill && valorNormalizado !== esperado) {
+    return {
+      valor: valorNormalizado,
+      pendencia: {
+        peso: 2,
+        mensagem: `${nomeCampo} informado ("${valorNormalizado}") diverge do padrão esperado ("${esperado}").`,
+      },
+    };
+  }
+
+  return { valor: valorNormalizado };
+}
+
+interface ResultadoCampoNumero {
+  valor: number | null;
+  pendencia?: Pendencia;
+  autopreenchido?: boolean;
+}
+
+function processarCampoNumero(opts: {
+  nomeCampo: string;
+  bruto: number | null;
+  esperado: number | null | undefined;
+  bloquearAutofill: boolean;
+}): ResultadoCampoNumero {
+  const { nomeCampo, bruto, esperado, bloquearAutofill } = opts;
+
+  if (!estaPreenchido(bruto)) {
+    if (bloquearAutofill || esperado === undefined || esperado === null) return { valor: null };
+    return { valor: esperado, autopreenchido: true };
+  }
+
+  if (esperado !== undefined && esperado !== null && !bloquearAutofill && Math.abs((bruto as number) - esperado) > 0.001) {
+    return {
+      valor: bruto,
+      pendencia: {
+        peso: 2,
+        mensagem: `${nomeCampo} informado (${bruto}) diverge do padrão esperado (${esperado}).`,
+      },
+    };
+  }
+
+  return { valor: bruto };
+}
+
+interface ResultadoCampoTexto {
+  valor: string;
+  pendencia?: Pendencia;
+  autopreenchido?: boolean;
+}
+
+function processarCampoTextoLivre(opts: {
+  nomeCampo: string;
+  bruto: string;
+  esperado: string | undefined;
+  bloquearAutofill: boolean;
+}): ResultadoCampoTexto {
+  const { nomeCampo, bruto, esperado, bloquearAutofill } = opts;
+
+  if (!estaPreenchido(bruto)) {
+    if (bloquearAutofill || esperado === undefined || esperado === "") return { valor: "" };
+    return { valor: esperado, autopreenchido: true };
+  }
+
+  if (esperado !== undefined && !bloquearAutofill && bruto.trim() !== esperado) {
+    return {
+      valor: bruto,
+      pendencia: {
+        peso: 2,
+        mensagem: `${nomeCampo} informado ("${bruto}") diverge do padrão esperado ("${esperado}").`,
+      },
+    };
+  }
+
+  return { valor: bruto };
+}
+
+function pesoParaStatus(peso: number): StatusLinha {
+  if (peso >= 3) return "Revisar manualmente";
+  if (peso === 2) return "Divergência detectada";
+  if (peso === 1) return "Preenchido automaticamente";
+  return "OK";
+}
+
+export function classificarProdutoCliente(input: ClientProdutoEntrada): ClientProdutoResultado {
+  const pendencias: Pendencia[] = [];
+  let algumAutofill = false;
+
+  const ncmDigitos = input.ncm;
+  const ncmValido = ncmDigitos.length === 8;
+  if (!ncmDigitos) {
+    pendencias.push({ peso: 2, mensagem: "NCM não informado." });
+  } else if (!ncmValido) {
+    pendencias.push({
+      peso: 2,
+      mensagem: `NCM "${input.ncmOriginal}" tem ${ncmDigitos.length} dígito(s) (esperado 8) — sobrescritas por NCM podem não ter sido aplicadas.`,
+    });
+  }
+
+  const categoria = categorizarTributacao(input.tributacao);
+  if (categoria === "desconhecido") {
+    pendencias.push({ peso: 3, mensagem: `Tributação "${input.tributacao || "(vazia)"}" não reconhecida.` });
+  }
+  const bloquearAutofill = categoria === "isento_nao_tributado";
+  if (bloquearAutofill) {
+    pendencias.push({
+      peso: 3,
+      mensagem: `Tributação "${input.tributacao}": CFOP/CST não são preenchidos automaticamente.`,
+    });
+  }
+
+  const padraoBase = categoria === "st" ? PADRAO_ST : categoria === "tributado" ? PADRAO_TRIBUTADO : null;
+  // Sobrescritas por NCM só se aplicam sobre um padrão de Tributação existente.
+  const override = padraoBase && ncmValido ? buscarOverridePorNcm(ncmDigitos) : undefined;
+  if (override) {
+    pendencias.push({ peso: 0, mensagem: `Sobrescrita por NCM aplicada: ${override.observacao}` });
+  }
+
+  function campoCodigo(
+    nomeCampo: string,
+    bruto: string,
+    digitos: number,
+    esperado: string | undefined,
+    sempreAlertarDivergenciaDigitos = false
+  ): string {
+    const r = processarCampoCodigo({
+      nomeCampo,
+      bruto,
+      digitosEsperados: digitos,
+      esperado,
+      bloquearAutofill,
+      sempreAlertarDivergenciaDigitos,
+    });
+    if (r.pendencia) pendencias.push(r.pendencia);
+    if (r.autopreenchido) algumAutofill = true;
+    return r.valor;
+  }
+
+  function campoNumero(nomeCampo: string, bruto: number | null, esperado: number | null | undefined): number | null {
+    const r = processarCampoNumero({ nomeCampo, bruto, esperado, bloquearAutofill });
+    if (r.pendencia) pendencias.push(r.pendencia);
+    if (r.autopreenchido) algumAutofill = true;
+    return r.valor;
+  }
+
+  function campoTexto(nomeCampo: string, bruto: string, esperado: string | undefined): string {
+    const r = processarCampoTextoLivre({ nomeCampo, bruto, esperado, bloquearAutofill });
+    if (r.pendencia) pendencias.push(r.pendencia);
+    if (r.autopreenchido) algumAutofill = true;
+    return r.valor;
+  }
+
+  const cfopSaidas = campoCodigo("CFOP SAIDAS", input.cfopSaidas, 4, padraoBase?.cfopSaidas);
+  const cstIcms = campoCodigo("CST ICMS", input.cstIcms, 3, padraoBase?.cstIcms);
+  const cstPisCofins = campoCodigo(
+    "CST PIS/COFINS",
+    input.cstPisCofins,
+    2,
+    override?.cstPisCofins ?? padraoBase?.cstPisCofins
+  );
+  const pis = campoNumero("PIS", input.pis, override?.pis ?? padraoBase?.pis);
+  const cofins = campoNumero("COFINS", input.cofins, override?.cofins ?? padraoBase?.cofins);
+  const natReceita = campoTexto("NAT. RECEITA", input.natReceita, override?.natReceita ?? padraoBase?.natReceita);
+  const cstIbsCbs = campoCodigo("CST IBS/CBS", input.cstIbsCbs, 3, override?.cstIbsCbs ?? padraoBase?.cstIbsCbs);
+  const cclasstrib = campoCodigo(
+    "Cclasstrib",
+    input.cclasstrib,
+    6,
+    override?.cclasstrib ?? padraoBase?.cclasstrib,
+    true
+  );
+  const redBc = campoNumero("RED. B.C.", input.redBc, override?.redBc ?? padraoBase?.redBc);
+  const ibs = campoNumero("IBS", input.ibs, padraoBase?.ibs);
+  const cbs = campoNumero("CBS", input.cbs, padraoBase?.cbs);
+
+  const pesoFinal = Math.max(0, ...pendencias.map((p) => p.peso), algumAutofill ? 1 : 0);
+  const status = pesoParaStatus(pesoFinal);
+  const observacao = status === "OK" ? "" : pendencias.map((p) => p.mensagem).join(" ");
+
+  return {
+    ...input,
+    cfopSaidas,
+    cstIcms,
+    cstPisCofins,
+    pis,
+    cofins,
+    natReceita,
+    cstIbsCbs,
+    cclasstrib,
+    redBc,
+    ibs,
+    cbs,
+    status,
+    observacao,
+  };
+}
+
+export interface ProgressoClassificacao {
+  processados: number;
+  total: number;
 }
 
 /**
- * Exceções e regras específicas por NCM. Comece vazio e adicione entradas
- * conforme casos reais forem identificados na prática (ex.: produtos
- * monofásicos, produtos com ST convenial, itens de anexos específicos da
- * LC nº 214/2025). Uma entrada aqui tem prioridade sobre o padrão do motor.
+ * Classifica em lotes, cedendo o controle ao event loop entre eles, para que
+ * a interface possa repintar uma barra de progresso em planilhas grandes
+ * (dezenas de milhares de linhas) sem travar.
  */
-export interface NcmExcecao {
-  cstPis?: string;
-  cstCofins?: string;
-  cstIbsCbs?: string;
-  cClassTrib?: ClassTrib;
-  observacao: string;
-  norma: string;
-}
+export async function classificarProdutosClienteAsync(
+  entradas: ClientProdutoEntrada[],
+  opts?: { tamanhoLote?: number; onProgresso?: (p: ProgressoClassificacao) => void }
+): Promise<ClientProdutoResultado[]> {
+  const tamanhoLote = opts?.tamanhoLote ?? 2000;
+  const resultados: ClientProdutoResultado[] = new Array(entradas.length);
 
-export const ncmExcecoes: Record<string, NcmExcecao> = {
-  // Exemplo de como adicionar uma exceção (mantido comentado como referência):
-  // "22021000": {
-  //   cstPis: "04",
-  //   cstCofins: "04",
-  //   observacao: "Refrigerantes: tributação monofásica de PIS/COFINS na revenda.",
-  //   norma: "Lei nº 13.097/2015, art. 14",
-  // },
-};
-
-function cfopChave(prefixo: string, sufixo: string): CodigoDescricao {
-  const entrada = CFOP[`${prefixo}${sufixo}`];
-  if (!entrada) {
-    throw new Error(`CFOP não cadastrado para prefixo ${prefixo} e sufixo ${sufixo}`);
-  }
-  return entrada;
-}
-
-interface ResultadoCfop {
-  cfop: CodigoDescricao;
-  alertas: Alerta[];
-}
-
-function resolverComST(input: ProdutoEntrada): { comST: boolean; alerta?: Alerta } {
-  if (input.stBahia === "sim") return { comST: true };
-  if (input.stBahia === "nao") return { comST: false };
-  return {
-    comST: false,
-    alerta: {
-      campo: "ST Bahia",
-      mensagem:
-        "Substituição Tributária de ICMS não confirmada para este item. O motor aplicou, por padrão conservador, o CFOP sem ST — confirme o enquadramento do NCM antes de emitir o documento fiscal.",
-      norma: NORMA_ST_BAHIA,
-    },
-  };
-}
-
-function resolverCfop(input: ProdutoEntrada): ResultadoCfop {
-  const alertas: Alerta[] = [];
-  const { comST, alerta: alertaST } = resolverComST(input);
-  const usaVarianteST = OPERACOES_COM_VARIANTE_ST.has(input.tipoOperacao);
-
-  if (comST && !usaVarianteST) {
-    alertas.push({
-      campo: "ST Bahia",
-      mensagem:
-        "ST Bahia foi marcada como 'sim', mas este tipo de operação não possui uma variante de CFOP específica de ST neste motor. Revise manualmente o CFOP.",
-      norma: NORMA_ST_BAHIA,
-    });
-  } else if (alertaST && usaVarianteST) {
-    alertas.push(alertaST);
-  }
-
-  const direcaoOperacao = direcao(input.tipoOperacao);
-
-  if (input.destino === "exportacao") {
-    if (direcaoOperacao === "saida") {
-      alertas.push({
-        campo: "CFOP",
-        mensagem:
-          "Destino de exportação: defina o CFOP 7.xxx específico da operação (fora do escopo automático deste motor).",
-        norma: "Ajuste SINIEF 07/2001 (tabela de CFOP)",
-      });
-      return { cfop: CFOP_EXPORTACAO, alertas };
+  for (let inicio = 0; inicio < entradas.length; inicio += tamanhoLote) {
+    const fim = Math.min(inicio + tamanhoLote, entradas.length);
+    for (let i = inicio; i < fim; i++) {
+      resultados[i] = classificarProdutoCliente(entradas[i]);
     }
-    alertas.push({
-      campo: "CFOP",
-      mensagem:
-        "Entrada com origem no exterior (importação/devolução de exportação): defina o CFOP 3.xxx específico (fora do escopo automático deste motor).",
-      norma: "Ajuste SINIEF 07/2001 (tabela de CFOP)",
-    });
-    return { cfop: CFOP_IMPORTACAO, alertas };
+    opts?.onProgresso?.({ processados: fim, total: entradas.length });
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  const prefixo = direcaoOperacao === "saida"
-    ? (input.destino === "interna" ? "5" : "6")
-    : (input.destino === "interna" ? "1" : "2");
-
-  switch (input.tipoOperacao) {
-    case "venda": {
-      if (!comST) return { cfop: cfopChave(prefixo, "102"), alertas };
-      // Exceção da tabela oficial de CFOP: venda com ST usa sufixo 405 (interna) / 404 (interestadual).
-      return { cfop: cfopChave(prefixo, prefixo === "5" ? "405" : "404"), alertas };
-    }
-    case "compra":
-      return { cfop: comST ? cfopChave(prefixo, "403") : cfopChave(prefixo, "102"), alertas };
-    case "devolucao_compra":
-      return { cfop: comST ? cfopChave(prefixo, "411") : cfopChave(prefixo, "202"), alertas };
-    case "devolucao_venda":
-      return { cfop: cfopChave(prefixo, "202"), alertas };
-    case "transferencia":
-      return { cfop: comST ? cfopChave(prefixo, "409") : cfopChave(prefixo, "152"), alertas };
-    case "bonificacao_doacao":
-      return { cfop: cfopChave(prefixo, "910"), alertas };
-    case "remessa_conserto":
-      return { cfop: cfopChave(prefixo, "915"), alertas };
-    case "retorno_conserto":
-      return { cfop: cfopChave(prefixo, "916"), alertas };
-    default: {
-      const _exhaustive: never = input.tipoOperacao;
-      throw new Error(`Tipo de operação não tratado: ${_exhaustive}`);
-    }
-  }
-}
-
-interface ResultadoPisCofins {
-  cst: CodigoDescricao;
-  alertas: Alerta[];
-}
-
-function resolverCstPisCofins(input: ProdutoEntrada): ResultadoPisCofins {
-  const alertas: Alerta[] = [];
-  const direcaoOperacao = direcao(input.tipoOperacao);
-
-  if (input.isentoPisCofins === "verificar") {
-    alertas.push({
-      campo: "Isento PIS/COFINS",
-      mensagem: "Isenção de PIS/COFINS não confirmada para este NCM — confirme antes de emitir o documento fiscal.",
-      norma: NORMA_PIS_COFINS,
-    });
-  }
-  if (input.monofasicoPisCofins === "verificar") {
-    alertas.push({
-      campo: "Monofásico PIS/COFINS",
-      mensagem:
-        "Tributação monofásica de PIS/COFINS não confirmada para este NCM — confirme na lista de produtos monofásicos antes de emitir o documento fiscal.",
-      norma: NORMA_PIS_COFINS,
-    });
-  }
-  if (input.isentoPisCofins === "sim" && input.monofasicoPisCofins === "sim") {
-    alertas.push({
-      campo: "Isento / Monofásico PIS/COFINS",
-      mensagem:
-        "Item marcado simultaneamente como isento e monofásico. O motor priorizou a isenção — revise manualmente qual condição prevalece.",
-      norma: NORMA_PIS_COFINS,
-    });
-  }
-
-  if (direcaoOperacao === "saida") {
-    if (input.isentoPisCofins === "sim") {
-      return { cst: CST_PIS_COFINS["07"], alertas };
-    }
-    if (input.monofasicoPisCofins === "sim") {
-      return { cst: CST_PIS_COFINS["04"], alertas };
-    }
-    return { cst: CST_PIS_COFINS["01"], alertas };
-  }
-
-  // Entrada (compra, devolução de venda): Anexo II da IN RFB nº 2.121/2022.
-  if (input.isentoPisCofins === "sim") {
-    return { cst: CST_PIS_COFINS["71"], alertas };
-  }
-  if (input.monofasicoPisCofins === "sim") {
-    alertas.push({
-      campo: "Monofásico PIS/COFINS",
-      mensagem:
-        "Aquisição de produto monofásico: em regra não há direito a crédito de PIS/COFINS pelo revendedor. Confirme antes de emitir/escriturar.",
-      norma: NORMA_PIS_COFINS,
-    });
-    return { cst: CST_PIS_COFINS["70"], alertas };
-  }
-  alertas.push({
-    campo: "CST PIS/COFINS (entrada)",
-    mensagem:
-      "Confirme o regime de apuração (Lucro Real ou Presumido) para definir se há direito a crédito de PIS/COFINS (CST 50 a 56) ou não (CST 70) sobre esta aquisição. O motor aplicou 'Outras Operações de Entrada' como padrão neutro.",
-    norma: NORMA_PIS_COFINS + ", Anexo II",
-  });
-  return { cst: CST_PIS_COFINS["98"], alertas };
-}
-
-interface ResultadoIbsCbs {
-  cst: CodigoDescricao;
-  cClassTrib: ClassTrib;
-  alertas: Alerta[];
-}
-
-function resolverIbsCbs(input: ProdutoEntrada): ResultadoIbsCbs {
-  const alertas: Alerta[] = [];
-
-  if (input.anexoLc214 === "sim") {
-    alertas.push({
-      campo: "Anexo LC 214/2025",
-      mensagem:
-        "Produto sinalizado com possível enquadramento em anexo específico da LC nº 214/2025 (alíquota reduzida, isenção, diferimento, monofasia etc.). O motor aplicou por padrão a tributação integral (CST 000 / cClassTrib 000001) — confirme o NCM contra os Anexos da lei e a tabela vigente do Informe Técnico NF-e 2025.002 antes de emitir o documento fiscal.",
-      norma: NORMA_LC214,
-    });
-  } else if (input.anexoLc214 === "verificar") {
-    alertas.push({
-      campo: "Anexo LC 214/2025",
-      mensagem:
-        "Enquadramento em anexo da LC nº 214/2025 não confirmado. Confirme o NCM contra os Anexos da lei antes de emitir o documento fiscal.",
-      norma: NORMA_LC214,
-    });
-  }
-
-  return { cst: CST_IBS_CBS["000"], cClassTrib: CCLASSTRIB_PADRAO, alertas };
-}
-
-function resolverAlertasDestinatario(input: ProdutoEntrada): Alerta[] {
-  if (input.tipoOperacao !== "venda") return [];
-  const alertas: Alerta[] = [];
-  if (input.destino === "interestadual" && input.destinatario === "consumidor_final") {
-    alertas.push({
-      campo: "Destinatário",
-      mensagem:
-        "Venda interestadual a consumidor final: verifique o DIFAL e a partilha do ICMS entre a Bahia e o estado de destino.",
-      norma: "EC nº 87/2015; Convênio ICMS nº 236/2021",
-    });
-  }
-  if (input.destinatario === "orgao_publico") {
-    alertas.push({
-      campo: "Destinatário",
-      mensagem:
-        "Venda para órgão público: verifique eventual retenção de tributos na fonte (ICMS/PIS/COFINS/IR/CSLL) conforme a legislação do ente contratante.",
-      norma: "Legislação do ente público contratante",
-    });
-  }
-  return alertas;
-}
-
-export function classificarProduto(input: ProdutoEntrada): ProdutoResultado {
-  const alertas: Alerta[] = [];
-
-  const { cfop, alertas: alertasCfop } = resolverCfop(input);
-  const { cst: cstPisBase, alertas: alertasPis } = resolverCstPisCofins(input);
-  const { cst: cstIbsCbsBase, cClassTrib: cClassTribBase, alertas: alertasIbs } = resolverIbsCbs(input);
-  alertas.push(...alertasCfop, ...alertasPis, ...alertasIbs, ...resolverAlertasDestinatario(input));
-
-  let cstPis = cstPisBase;
-  let cstCofins = cstPisBase;
-  let cstIbsCbs = cstIbsCbsBase;
-  let cClassTrib = cClassTribBase;
-
-  const excecao = ncmExcecoes[input.ncm];
-  if (excecao) {
-    if (excecao.cstPis) cstPis = CST_PIS_COFINS[excecao.cstPis] ?? cstPis;
-    if (excecao.cstCofins) cstCofins = CST_PIS_COFINS[excecao.cstCofins] ?? cstCofins;
-    if (excecao.cstIbsCbs) cstIbsCbs = CST_IBS_CBS[excecao.cstIbsCbs] ?? cstIbsCbs;
-    if (excecao.cClassTrib) cClassTrib = excecao.cClassTrib;
-    alertas.push({
-      campo: "Exceção por NCM",
-      mensagem: `Regra específica aplicada para o NCM ${input.ncm}: ${excecao.observacao}`,
-      norma: excecao.norma,
-    });
-  }
-
-  return {
-    codigo: input.codigo,
-    descricao: input.descricao,
-    ncm: input.ncm,
-    cfop,
-    cstPis,
-    cstCofins,
-    cstIbsCbs,
-    cClassTrib,
-    alertas,
-    linha: input.linha,
-  };
-}
-
-export function classificarProdutos(inputs: ProdutoEntrada[]): ProdutoResultado[] {
-  return inputs.map(classificarProduto);
+  return resultados;
 }
