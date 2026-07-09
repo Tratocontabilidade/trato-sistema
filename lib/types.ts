@@ -18,8 +18,12 @@ export type StatusLinha =
 /**
  * Linha lida da planilha do cliente, já normalizada.
  *
- * Campos de repasse (código, nome, código de barras, UN, preço unit., ALIQ.
- * FCP) são mantidos como vieram — o motor não os interpreta.
+ * Campos de repasse (código, nome, código de barras, UN, preço unit.) são
+ * mantidos como vieram — o motor não os interpreta.
+ *
+ * ALIQ. FCP é repasse para a maioria dos NCMs, mas passa a ser interpretado
+ * pelo motor para cosméticos/perfumaria sujeitos ao FCP 2% da Bahia (IN SAT
+ * nº 005/2016) — ver `avaliarFcpCosmeticos` em lib/tables.ts.
  *
  * Campos de classificação (NCM em diante) são normalizados na leitura
  * (dígitos, largura de código) para que o motor possa comparar e validar.

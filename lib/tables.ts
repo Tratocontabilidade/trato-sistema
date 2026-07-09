@@ -54,7 +54,19 @@ export const PADRAO_ST_CUMULATIVO = { ...PADRAO_ST, pis: 0.65, cofins: 3.0 };
 
 export type PadraoTributacao = typeof PADRAO_TRIBUTADO;
 
-/** Sobrescrita de classificação aplicada por prefixo de NCM, além (ou no lugar) do padrão de Tributação. */
+/**
+ * Sobrescrita de classificação aplicada por prefixo de NCM, além (ou no lugar)
+ * do padrão de Tributação.
+ *
+ * Importante: este tipo NÃO tem campos `cfopSaidas`/`cstIcms` de propósito —
+ * a decisão de Substituição Tributária nunca pode vir de uma entrada fixa
+ * desta tabela. ST é decidida exclusivamente pelos anexos ativos da empresa
+ * (`lib/anexos.ts`, ver prioridade em `lib/rules.ts`) ou, na ausência de
+ * qualquer anexo, pela coluna Tributação da planilha do cliente. Se um dia
+ * for necessário sinalizar aqui que um NCM É objeto de ST, isso deve ser
+ * feito cadastrando o NCM em um anexo — nunca adicionando campos de CFOP/CST
+ * ICMS a este tipo.
+ */
 export interface OverrideClassificacao {
   cstIbsCbs?: string;
   cclasstrib?: string;
@@ -227,4 +239,129 @@ export const NCM_OVERRIDES: NcmOverrideEntry[] = [
 export function buscarOverridePorNcm(ncmDigitos: string): OverrideClassificacao | undefined {
   const entrada = NCM_OVERRIDES.find((e) => e.prefixos.some((p) => ncmDigitos.startsWith(p)));
   return entrada?.override;
+}
+
+// ---------------------------------------------------------------------
+// FCP 2% — Fundo Estadual de Combate e Erradicação da Pobreza (Bahia),
+// Instrução Normativa SAT nº 005/2016, para produtos de perfumaria e
+// cosméticos. Preenche a coluna "ALIQ. FCP" da planilha de saída. É uma
+// obrigação independente da Substituição Tributária (Bloco 3) — um produto
+// pode levar FCP 2% sem ser ST, e vice-versa.
+// ---------------------------------------------------------------------
+
+/** Alíquota do FCP-BA para os itens de perfumaria/cosméticos da IN SAT nº 005/2016. */
+export const ALIQUOTA_FCP_COSMETICOS_BA = 2;
+
+interface FaixaFcpBa {
+  inicio: string;
+  fim: string;
+  descricao: string;
+}
+
+interface PrefixoFcpBa {
+  prefixo: string;
+  descricao: string;
+}
+
+/** Prefixos de NCM (qualquer comprimento) que levam FCP 2% na íntegra do subitem. */
+const FCP_BA_PREFIXOS: PrefixoFcpBa[] = [
+  { prefixo: "33041", descricao: "produtos de maquiagem para os lábios (batom, gloss)" },
+  { prefixo: "33043", descricao: "preparações para manicuros e pedicuros, esmaltes, removedores de esmalte" },
+  { prefixo: "330491", descricao: "pós, incluindo compactos, para maquilagem" },
+  { prefixo: "33052", descricao: "preparações para ondulação/alisamento permanentes dos cabelos" },
+  { prefixo: "33053", descricao: "laquês, fixadores e gel fixador" },
+  {
+    prefixo: "33059",
+    descricao: "tinturas capilares, tonalizantes, xampus colorantes, máscaras capilares, finalizadores",
+  },
+  { prefixo: "33073", descricao: "sais perfumados e outras preparações para banhos" },
+  { prefixo: "33079", descricao: "depilatórios, ceras, papéis perfumados" },
+  { prefixo: "2847", descricao: "água oxigenada 10 a 40 volumes" },
+  { prefixo: "48182", descricao: "lenços de desmaquilar" },
+];
+
+/** Faixas de NCM de 8 dígitos (início/fim inclusive) que levam FCP 2%. */
+const FCP_BA_FAIXAS: FaixaFcpBa[] = [
+  { inicio: "33042010", fim: "33042019", descricao: "sombra, delineador, lápis para sobrancelhas, rímel" },
+  { inicio: "33042090", fim: "33042099", descricao: "outros produtos de maquiagem para os olhos" },
+  { inicio: "33049910", fim: "33049919", descricao: "cremes de beleza, cremes nutritivos, loções tônicas, esfoliantes" },
+  { inicio: "33049990", fim: "33049999", descricao: "outros produtos de beleza e cuidados da pele, bronzeadores" },
+];
+
+// NCM 3303 (perfumes e águas de colônia) NÃO consta na IN SAT nº 005/2016 —
+// não leva FCP 2%. Omissão intencional das listas acima; documentado aqui
+// para não ser "corrigido" por engano no futuro.
+
+function localizarNaListaFcp(ncmDigitos: string): { descricao: string } | null {
+  const prefixo = FCP_BA_PREFIXOS.find((p) => ncmDigitos.startsWith(p.prefixo));
+  if (prefixo) return { descricao: prefixo.descricao };
+  if (ncmDigitos.length === 8) {
+    const faixa = FCP_BA_FAIXAS.find((f) => ncmDigitos >= f.inicio && ncmDigitos <= f.fim);
+    if (faixa) return { descricao: faixa.descricao };
+  }
+  return null;
+}
+
+const REGEX_DIACRITICOS_FCP = /[\u0300-\u036f]/g;
+function normalizarNomeFcp(v: string): string {
+  return v
+    .normalize("NFD")
+    .replace(REGEX_DIACRITICOS_FCP, "")
+    .toLowerCase()
+    .trim();
+}
+
+export interface AvaliacaoFcpCosmeticos {
+  /** true = deve levar FCP 2%; false = cai numa exceção da IN 005/2016 (não leva). */
+  aplicaFcp: boolean;
+  descricao?: string;
+  /** Motivo da exceção, quando aplicaFcp é false por um casamento de palavra-chave no Nome. */
+  excecao?: string;
+  /** Nome vazio/insuficiente para checar as exceções — regra de ouro: nunca chutar. */
+  ambiguo?: boolean;
+  motivoAmbiguo?: string;
+}
+
+/**
+ * Avalia se um produto leva FCP 2% (IN SAT nº 005/2016), conferindo o NCM
+ * contra as listas acima e as exceções documentadas por palavra-chave no
+ * Nome do produto. Retorna `null` quando o NCM não está sujeito ao FCP de
+ * cosméticos (a maioria dos produtos) — nesse caso a coluna ALIQ. FCP não é
+ * tocada pelo motor.
+ */
+export function avaliarFcpCosmeticos(ncmDigitos: string, nomeOriginal: string): AvaliacaoFcpCosmeticos | null {
+  if (ncmDigitos.length !== 8) return null;
+  const achado = localizarNaListaFcp(ncmDigitos);
+  if (!achado) return null;
+
+  const nome = normalizarNomeFcp(nomeOriginal);
+  if (!nome) {
+    return {
+      aplicaFcp: false,
+      ambiguo: true,
+      motivoAmbiguo:
+        "NCM consta na lista de FCP 2% (IN SAT nº 005/2016), mas o produto não tem Nome preenchido para conferir as exceções da instrução normativa.",
+    };
+  }
+
+  if (ncmDigitos.startsWith("330499") && /protetor solar|bronzeador solar|anti-solar|antissolar|\bfps\b/.test(nome)) {
+    return { aplicaFcp: false, excecao: "protetor/bronzeador solar — exceção do 3304.99 (preparações anti-solares)" };
+  }
+  if (ncmDigitos.startsWith("330499") && nome.includes("assadura")) {
+    return { aplicaFcp: false, excecao: "creme para assadura — exceção do 3304.99" };
+  }
+  if (ncmDigitos.startsWith("33059") && nome.includes("condicionador") && !/shampoo|xampu/.test(nome)) {
+    return { aplicaFcp: false, excecao: "condicionador como produto principal — exceção do 3305.9" };
+  }
+  if (ncmDigitos.startsWith("330491") && (nome.includes("talco") || nome.includes("polvilho"))) {
+    return { aplicaFcp: false, excecao: "talco/polvilho — exceção do 3304.91" };
+  }
+  if (
+    (ncmDigitos.startsWith("3304999") || ncmDigitos.startsWith("2847")) &&
+    (nome.includes("medicamento") || nome.includes("uso medicinal"))
+  ) {
+    return { aplicaFcp: false, excecao: "uso medicinal — exceção do 3304.99.9 / água oxigenada medicinal" };
+  }
+
+  return { aplicaFcp: true, descricao: achado.descricao };
 }

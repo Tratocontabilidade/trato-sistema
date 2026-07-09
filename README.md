@@ -126,12 +126,23 @@ parcial.
 - **Tributado** → CFOP 5102, CST ICMS 000, CST PIS/COFINS 01 (PIS 1,65% /
   COFINS 7,6%), CST IBS/CBS 000, cClassTrib 000001 (IBS 0,1% / CBS 0,9%).
 - **Substituição tributária** → mesmo padrão, com CFOP 5405 e CST ICMS 060.
+  A ST em si é decidida pelo anexo ativo da empresa quando existe um (ver
+  seção seguinte) — `NCM_OVERRIDES` nunca define CFOP/CST ICMS, de propósito,
+  para que nenhuma sobrescrita interna force ST à revelia do anexo vigente.
 - **Não tributado / Isento** → nada é preenchido automaticamente; a linha é
   sempre marcada para revisão manual.
 - Sobrescritas por NCM (`lib/tables.ts`, tabela `NCM_OVERRIDES`) têm
   prioridade sobre o padrão de Tributação para os campos que definem, exceto
   quando um anexo de ST ativo da empresa ou uma regra aprendida dizem o
   contrário (ver ordem de prioridade acima).
+- **ALIQ. FCP** é repasse para a maioria dos NCMs, mas o motor interpreta e
+  preenche automaticamente **2%** para os NCMs de perfumaria/cosméticos da
+  Bahia listados na Instrução Normativa SAT nº 005/2016 (`lib/tables.ts`,
+  `avaliarFcpCosmeticos`), respeitando as exceções documentadas por
+  palavra-chave no Nome do produto (ex.: protetor solar, talco, condicionador
+  puro, uso medicinal). Quando o NCM está na lista mas o Nome está vazio (não
+  dá para checar a exceção), a linha vira `Dúvida — aguardando instrução` em
+  vez de arriscar um FCP errado.
 - Se a linha já veio classificada pelo cliente, o motor **nunca sobrescreve**
   — só valida o formato do código (dígitos esperados) e a coerência com o
   padrão/sobrescrita aplicável, sinalizando divergência quando for o caso.
@@ -153,11 +164,24 @@ Tributária** (Excel ou CSV — tolerante a variações de cabeçalho como "NCM"
 mapear manualmente as colunas). Anexos **ativos** passam a decidir a ST por
 NCM no processamento, com prioridade sobre a coluna Tributação — e o motor
 sinaliza divergência se o CFOP que o cliente já preencheu não bater com o
-anexo.
+anexo. Quando a empresa tem pelo menos um anexo ativo, um NCM só é tratado
+como ST se constar nele; um valor legado de "Substituição tributária" na
+coluna Tributação do cliente nunca basta sozinho (ex.: se uma categoria
+deixa de ser ST por mudança na legislação, atualizar/remover o item do
+anexo é o que corrige a classificação — não é preciso mexer no código).
 
-No início de cada processamento, a tela **Instruções** deixa editar (só para
-aquela execução) o texto salvo na empresa. Comandos reconhecidos na v1
-(por palavra-chave, sem IA externa):
+No início de cada processamento, a tela **Instruções** também permite subir
+um **anexo de ST só para aquela rodada** (mesma detecção de colunas e
+mapeamento manual de fallback do cadastro da empresa). Esse anexo temporário
+**substitui** os anexos ativos da empresa só durante aquele processamento —
+o cadastro salvo não é alterado, e a tela mostra um aviso enquanto o anexo
+temporário estiver em uso, com um botão para removê-lo e voltar ao que está
+salvo na empresa. O resultado final sempre indica qual anexo foi usado
+("Anexo utilizado: …").
+
+Ainda na tela **Instruções**, dá para editar (só para aquela execução) o
+texto salvo na empresa. Comandos reconhecidos na v1 (por palavra-chave, sem
+IA externa):
 
 - "regime cumulativo" / "regime não-cumulativo" — sobrescreve o regime
   padrão da empresa para PIS/COFINS;
@@ -206,6 +230,13 @@ Para regenerar a planilha-modelo em `public/planilha-modelo.xlsx`:
 npm run gerar-modelo
 ```
 
+Para rodar os testes automatizados do motor de classificação
+(`scripts/testar-regras.ts` — sem framework externo, só `node:assert`):
+
+```bash
+npm test
+```
+
 ## Subindo para o GitHub
 
 ```bash
@@ -231,15 +262,21 @@ automaticamente um novo deploy.
 ## Manutenção das regras fiscais
 
 - `lib/tables.ts` contém os padrões de Tributação (`PADRAO_TRIBUTADO`,
-  `PADRAO_ST`) e a tabela aberta `NCM_OVERRIDES`, onde podem ser cadastradas
-  regras específicas por NCM (ex.: um produto monofásico, um item de anexo
-  da LC nº 214/2025) sem alterar o motor genérico em `lib/rules.ts`.
+  `PADRAO_ST`), a tabela aberta `NCM_OVERRIDES` (onde podem ser cadastradas
+  regras específicas por NCM, ex.: um produto monofásico, um item de anexo
+  da LC nº 214/2025, sem alterar o motor genérico em `lib/rules.ts`) e a
+  lista de FCP 2% de cosméticos da Bahia (`avaliarFcpCosmeticos`, IN SAT nº
+  005/2016) — inclusive suas exceções por palavra-chave no Nome.
+- A decisão de **Substituição Tributária nunca deve ir para `NCM_OVERRIDES`**
+  — isso é intencional (o tipo `OverrideClassificacao` não tem campos de
+  CFOP/CST ICMS). ST é sempre responsabilidade dos anexos da empresa
+  (`lib/anexos.ts`); para tirar ou incluir uma categoria da ST, atualize o
+  anexo, não o código.
 - Sempre que uma regra nova for identificada na prática contábil (um NCM, um
   padrão de Tributação diferente), descreva o caso (NCM ou prefixo, campos
-  afetados, base legal) para que `NCM_OVERRIDES` seja atualizado.
-- Depois de mudar `lib/tables.ts` ou `lib/rules.ts`, regenere a
-  planilha-modelo (`npm run gerar-modelo`) e confira o resultado antes de
-  publicar.
+  afetados, base legal) para que `NCM_OVERRIDES`/FCP seja atualizado.
+- Depois de mudar `lib/tables.ts` ou `lib/rules.ts`, rode `npm test` e
+  regenere a planilha-modelo (`npm run gerar-modelo`) antes de publicar.
 
 ## Limitações conhecidas
 
@@ -272,3 +309,10 @@ automaticamente um novo deploy.
   fluxo de aprendizado) ficam em cache **só em memória** — não são
   persistidos. Um recarregamento completo da página (F5) limpa esse cache;
   navegue pelo menu superior (links internos) para preservá-lo entre telas.
+- As exceções do FCP 2% de cosméticos (`avaliarFcpCosmeticos`) também são
+  casadas por palavra-chave no Nome do produto (ex.: "protetor solar",
+  "condicionador"), com a mesma limitação do casamento de segmento acima.
+  Quando o NCM está na lista de FCP mas o Nome está vazio, a linha vira
+  Dúvida em vez de arriscar; nomes fora do vocabulário reconhecido (ex.: uma
+  grafia muito diferente de "protetor solar") não acionam a exceção e o
+  produto recebe o FCP 2% padrão — confira manualmente casos de nome atípico.

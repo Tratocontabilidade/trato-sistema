@@ -17,11 +17,14 @@
 // aguardando instrução", citando o motivo.
 
 import {
+  ALIQUOTA_FCP_COSMETICOS_BA,
   PADRAO_TRIBUTADO,
   PADRAO_TRIBUTADO_CUMULATIVO,
   PADRAO_ST,
   PADRAO_ST_CUMULATIVO,
+  avaliarFcpCosmeticos,
   buscarOverridePorNcm,
+  type AvaliacaoFcpCosmeticos,
 } from "./tables";
 import { produtoPertenceAoSegmento, type Diretiva } from "./instructions";
 import { buscarNoAnexo } from "./anexos";
@@ -177,6 +180,73 @@ function processarCampoTextoLivre(opts: {
   return { valor: bruto };
 }
 
+interface ResultadoCampoFcp {
+  valor: string | number;
+  pendencia?: Pendencia;
+  autopreenchido?: boolean;
+}
+
+/**
+ * FCP 2% de cosméticos (Bahia, IN SAT nº 005/2016). `avaliacao` vem de
+ * `avaliarFcpCosmeticos` (lib/tables.ts) — `null` quando o NCM nem consta na
+ * lista, caso em que a coluna é só repassada (comportamento anterior).
+ */
+function processarAliqFcp(
+  bruto: string | number,
+  avaliacao: AvaliacaoFcpCosmeticos | null,
+  bloquearAutofill: boolean
+): ResultadoCampoFcp {
+  if (!avaliacao || bloquearAutofill) return { valor: bruto };
+
+  const brutoTexto = String(bruto ?? "").trim();
+  const brutoNumero = brutoTexto === "" ? null : Number(brutoTexto.replace("%", "").replace(",", "."));
+  const brutoPreenchido = brutoTexto !== "" && brutoNumero !== null && Number.isFinite(brutoNumero);
+
+  if (avaliacao.aplicaFcp) {
+    if (!brutoPreenchido) {
+      return {
+        valor: ALIQUOTA_FCP_COSMETICOS_BA,
+        autopreenchido: true,
+        pendencia: {
+          peso: 0,
+          mensagem: `ALIQ. FCP preenchida em ${ALIQUOTA_FCP_COSMETICOS_BA}% — ${avaliacao.descricao} (IN SAT nº 005/2016).`,
+        },
+      };
+    }
+    if (Math.abs((brutoNumero as number) - ALIQUOTA_FCP_COSMETICOS_BA) > 0.001) {
+      return {
+        valor: bruto,
+        pendencia: {
+          peso: 2,
+          mensagem: `ALIQ. FCP informada ("${brutoTexto}") diverge do esperado (${ALIQUOTA_FCP_COSMETICOS_BA}%) para este NCM (IN SAT nº 005/2016).`,
+        },
+      };
+    }
+    return { valor: bruto };
+  }
+
+  // Exceção da IN 005/2016 — não deve levar FCP 2%.
+  if (brutoPreenchido && brutoNumero !== 0) {
+    return {
+      valor: bruto,
+      pendencia: {
+        peso: 2,
+        mensagem: `ALIQ. FCP informada ("${brutoTexto}") diverge do esperado: produto sinalizado como exceção do FCP 2% pelo nome (${avaliacao.excecao}) — IN SAT nº 005/2016.`,
+      },
+    };
+  }
+  if (!brutoPreenchido) {
+    return {
+      valor: bruto,
+      pendencia: {
+        peso: 1,
+        mensagem: `Produto sinalizado como exceção do FCP 2% pelo nome (${avaliacao.excecao}) — IN SAT nº 005/2016.`,
+      },
+    };
+  }
+  return { valor: bruto };
+}
+
 function pesoParaStatus(peso: number): StatusLinha {
   if (peso >= 3) return "Revisar manualmente";
   if (peso === 2) return "Divergência detectada";
@@ -269,8 +339,13 @@ export function classificarProdutoCliente(
     });
   }
 
-  // Anexos ativos da empresa (Bloco 3) decidem ST por NCM, com prioridade sobre a coluna
-  // Tributação — mas só quando o produto já é tributável (não se aplica a isento/desconhecido).
+  // Anexos ativos da empresa (Bloco 3) são a ÚNICA fonte de verdade para ST quando
+  // existem: com pelo menos um anexo ativo, um NCM só é tratado como ST se constar
+  // nele — nunca por causa de um valor legado na coluna Tributação, e nunca por uma
+  // entrada de NCM_OVERRIDES (que não tem campos de CFOP/CST ICMS — ver lib/tables.ts).
+  // Isso vale mesmo que uma regra tenha existido no passado e tenha sido revogada
+  // (ex.: item 9-A do Anexo 1 do RICMS-BA revogado em 2026 para cosméticos): o anexo
+  // vigente decide, não uma suposição interna do sistema.
   const anexosAtivos = (contexto.anexosAtivos ?? []).filter((a) => a.ativo);
   const ncmNoAnexo = anexosAtivos.length > 0 && ncmValido ? buscarNoAnexo(ncmDigitos, anexosAtivos) : null;
   if (ncmNoAnexo !== null && (categoria === "tributado" || categoria === "st")) {
@@ -317,6 +392,14 @@ export function classificarProdutoCliente(
   const override = padraoBase && ncmValido ? buscarOverridePorNcm(ncmDigitos) : undefined;
   if (override) {
     pendencias.push({ peso: 0, mensagem: `Sobrescrita por NCM aplicada: ${override.observacao}` });
+  }
+
+  // FCP 2% de cosméticos (Bahia, IN SAT nº 005/2016) — só avaliado para produtos que
+  // já serão tributados (Padrão A/B); nunca aplica a isento/não tributado/desconhecido.
+  const avaliacaoFcp =
+    padraoBase && ncmValido ? avaliarFcpCosmeticos(ncmDigitos, String(input.nome ?? "")) : null;
+  if (avaliacaoFcp?.ambiguo) {
+    return construirResultadoDuvida(input, avaliacaoFcp.motivoAmbiguo!);
   }
 
   const diretivaReducao = contexto.diretivas.find(
@@ -382,6 +465,13 @@ export function classificarProdutoCliente(
     return r.valor;
   }
 
+  function campoFcp(bruto: string | number): string | number {
+    const r = processarAliqFcp(bruto, avaliacaoFcp, bloquearAutofill);
+    if (r.pendencia) pendencias.push(r.pendencia);
+    if (r.autopreenchido) algumAutofill = true;
+    return r.valor;
+  }
+
   const cfopSaidas = campoCodigo("CFOP SAIDAS", input.cfopSaidas, 4, regraAprendida("cfopSaidas") ?? padraoBase?.cfopSaidas);
   const cstIcms = campoCodigo("CST ICMS", input.cstIcms, 3, regraAprendida("cstIcms") ?? padraoBase?.cstIcms);
   const cstPisCofins = campoCodigo(
@@ -421,6 +511,7 @@ export function classificarProdutoCliente(
   );
   const ibs = campoNumero("IBS", input.ibs, padraoBase?.ibs);
   const cbs = campoNumero("CBS", input.cbs, padraoBase?.cbs);
+  const aliqFcp = campoFcp(input.aliqFcp);
 
   const pesoFinal = Math.max(0, ...pendencias.map((p) => p.peso), algumAutofill ? 1 : 0);
   const status = pesoParaStatus(pesoFinal);
@@ -439,6 +530,7 @@ export function classificarProdutoCliente(
     redBc,
     ibs,
     cbs,
+    aliqFcp,
     status,
     observacao,
   };
