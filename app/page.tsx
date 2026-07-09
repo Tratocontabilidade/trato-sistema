@@ -6,7 +6,7 @@ import { gerarPlanilhaClienteResultado, lerPlanilhaCliente, type PlanilhaCliente
 import { interpretarInstrucoes, descreverDiretiva, type Diretiva } from "@/lib/instructions";
 import { registrarProcessamento } from "@/lib/historico";
 import type { ClientProdutoResultado, ContextoClassificacao } from "@/lib/types";
-import type { Empresa } from "@/lib/empresas";
+import type { AnexoEmpresa, Empresa } from "@/lib/empresas";
 import { Selo } from "./components/Selo";
 import { StepIndicator } from "./components/StepIndicator";
 import { UploadArea } from "./components/UploadArea";
@@ -22,18 +22,27 @@ const ETAPAS = ["Empresa", "Instruções", "Enviar planilha", "Conferir classifi
 type Estado =
   | { fase: "empresa" }
   | { fase: "instrucoes"; empresa: Empresa }
-  | { fase: "upload"; empresa: Empresa; instrucoesTexto: string }
-  | { fase: "processando"; empresa: Empresa; instrucoesTexto: string; processados: number; total: number }
-  | { fase: "erro"; mensagem: string; empresa: Empresa; instrucoesTexto: string }
+  | { fase: "upload"; empresa: Empresa; instrucoesTexto: string; anexoTemporario?: AnexoEmpresa }
+  | {
+      fase: "processando";
+      empresa: Empresa;
+      instrucoesTexto: string;
+      anexoTemporario?: AnexoEmpresa;
+      processados: number;
+      total: number;
+    }
+  | { fase: "erro"; mensagem: string; empresa: Empresa; instrucoesTexto: string; anexoTemporario?: AnexoEmpresa }
   | {
       fase: "pronto";
       empresa: Empresa;
       instrucoesTexto: string;
+      anexoTemporario?: AnexoEmpresa;
       resultados: ClientProdutoResultado[];
       erros: string[];
       contexto: PlanilhaClienteContexto;
       nomeArquivo: string;
       naoReconhecidas: string[];
+      anexosUsados: AnexoEmpresa[];
     };
 
 function etapaAtual(estado: Estado): number {
@@ -75,15 +84,15 @@ export default function Page() {
 
   async function processarArquivo(arquivo: File) {
     if (estado.fase !== "upload" && estado.fase !== "erro") return;
-    const { empresa, instrucoesTexto } = estado;
+    const { empresa, instrucoesTexto, anexoTemporario } = estado;
 
-    setEstado({ fase: "processando", empresa, instrucoesTexto, processados: 0, total: 0 });
+    setEstado({ fase: "processando", empresa, instrucoesTexto, anexoTemporario, processados: 0, total: 0 });
     try {
       const buffer = await arquivo.arrayBuffer();
       const { produtos, erros, contexto } = lerPlanilhaCliente(buffer);
 
       if (!contexto) {
-        setEstado({ fase: "erro", mensagem: erros.join(" "), empresa, instrucoesTexto });
+        setEstado({ fase: "erro", mensagem: erros.join(" "), empresa, instrucoesTexto, anexoTemporario });
         return;
       }
 
@@ -92,19 +101,28 @@ export default function Page() {
         (d): d is Extract<Diretiva, { tipo: "regime" }> => d.tipo === "regime"
       );
       const regimeDaEmpresa = empresa.regimeTributario === "Lucro Real" ? "nao_cumulativo" : "cumulativo";
-      const anexosAtivos = empresa.anexos.filter((a) => a.ativo);
+      // Um anexo temporário subido na tela de instruções substitui inteiramente os
+      // anexos ativos salvos na empresa para esta rodada (não altera o cadastro).
+      const anexosUsados = anexoTemporario ? [anexoTemporario] : empresa.anexos.filter((a) => a.ativo);
       const contextoClassificacao: ContextoClassificacao = {
         regime: diretivaRegime?.regime ?? regimeDaEmpresa,
         diretivas,
-        anexosAtivos,
+        anexosAtivos: anexosUsados,
         regrasAprendidas: empresa.regrasAprendidas,
       };
 
-      setEstado({ fase: "processando", empresa, instrucoesTexto, processados: 0, total: produtos.length });
+      setEstado({
+        fase: "processando",
+        empresa,
+        instrucoesTexto,
+        anexoTemporario,
+        processados: 0,
+        total: produtos.length,
+      });
       const resultados = await classificarProdutosClienteAsync(produtos, {
         contexto: contextoClassificacao,
         onProgresso: ({ processados, total }) =>
-          setEstado({ fase: "processando", empresa, instrucoesTexto, processados, total }),
+          setEstado({ fase: "processando", empresa, instrucoesTexto, anexoTemporario, processados, total }),
       });
 
       let ok = 0;
@@ -123,7 +141,7 @@ export default function Page() {
         empresaId: empresa.id,
         nomeArquivo: arquivo.name,
         instrucoesAplicadas: diretivas.map(descreverDiretiva),
-        anexosAtivos: anexosAtivos.map((a) => a.nome),
+        anexosAtivos: anexosUsados.map((a) => a.nome),
         contadores: { total: resultados.length, ok, preenchidos, revisar, divergentes, duvidas },
         resultados,
         contexto,
@@ -133,11 +151,13 @@ export default function Page() {
         fase: "pronto",
         empresa,
         instrucoesTexto,
+        anexoTemporario,
         resultados,
         erros,
         contexto,
         nomeArquivo: arquivo.name,
         naoReconhecidas,
+        anexosUsados,
       });
     } catch (e) {
       setEstado({
@@ -145,6 +165,7 @@ export default function Page() {
         mensagem: e instanceof Error ? e.message : "Falha desconhecida ao ler a planilha.",
         empresa,
         instrucoesTexto,
+        anexoTemporario,
       });
     }
   }
@@ -165,7 +186,12 @@ export default function Page() {
 
   function novaPlanilha() {
     if (estado.fase === "pronto" || estado.fase === "erro") {
-      setEstado({ fase: "upload", empresa: estado.empresa, instrucoesTexto: estado.instrucoesTexto });
+      setEstado({
+        fase: "upload",
+        empresa: estado.empresa,
+        instrucoesTexto: estado.instrucoesTexto,
+        anexoTemporario: estado.anexoTemporario,
+      });
     }
   }
 
@@ -218,7 +244,9 @@ export default function Page() {
       {estado.fase === "instrucoes" && (
         <TelaInstrucoes
           empresa={estado.empresa}
-          onComecar={(instrucoesTexto) => setEstado({ fase: "upload", empresa: estado.empresa, instrucoesTexto })}
+          onComecar={(instrucoesTexto, anexoTemporario) =>
+            setEstado({ fase: "upload", empresa: estado.empresa, instrucoesTexto, anexoTemporario })
+          }
           onVoltar={() => setEstado({ fase: "empresa" })}
         />
       )}
@@ -249,6 +277,16 @@ export default function Page() {
               Nova planilha
             </button>
           </div>
+
+          <p className="campo-ajuda">
+            Anexo utilizado:{" "}
+            {estado.anexoTemporario
+              ? `temporário (${estado.anexoTemporario.nome})`
+              : estado.anexosUsados.length > 0
+                ? estado.anexosUsados.map((a) => a.nome).join(", ") + " (salvo na empresa)"
+                : "nenhum anexo ativo — ST decidida pela coluna Tributação"}
+            .
+          </p>
 
           {estado.naoReconhecidas.length > 0 && (
             <div className="disclaimer">

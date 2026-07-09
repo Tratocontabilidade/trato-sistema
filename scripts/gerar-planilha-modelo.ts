@@ -2,11 +2,13 @@
 // que os clientes do escritório enviam: título mesclado na linha 1,
 // cabeçalho na linha 2, dados a partir da linha 3.
 //
-// As 30 linhas cobrem: Tributado, Substituição tributária, sobrescritas por
+// As linhas cobrem: Tributado, Substituição tributária, sobrescritas por
 // NCM (carnes, xampu/cosmético, escova dental, inseticida), cClassTrib com
 // quantidade errada de dígitos, linhas já classificadas corretamente (OK),
 // Não tributado/Isento (revisar manualmente), Tributação não reconhecida,
-// NCM sujo (com pontos, curto, vazio) e preenchimento parcial.
+// NCM sujo (com pontos, curto, vazio), preenchimento parcial e FCP 2% de
+// cosméticos na Bahia (IN SAT nº 005/2016): item elegível preenchido
+// automaticamente e item elegível com exceção pelo nome (protetor solar).
 //
 // Rode com: npm run gerar-modelo
 
@@ -104,6 +106,12 @@ const linhas: Linha[] = [
 
   // 30: NAT. RECEITA preenchida sem motivo (diverge do esperado vazio) -> Divergência detectada
   ["1030", "Produto com NAT. RECEITA divergente", "7891000000295", "UN", "Tributado", 9.5, "39269090", "", "", "", "", "", "", "999", "", "", "", "", ""],
+
+  // 31: NCM elegível ao FCP 2% (batom) -> ALIQ. FCP preenchida automaticamente em 2%
+  ["1031", "BATOM LIQ DAILUS SISSONE", "7891000000301", "UN", "Tributado", 8.9, "33041000", "", "", "", "", "", "", "", "", "", "", "", ""],
+
+  // 32: NCM elegível ao FCP 2% mas exceção pelo Nome (protetor solar) -> ALIQ. FCP não preenchida
+  ["1032", "PROTETOR SOLAR SUNDOWN FPS 30", "7891000000318", "UN", "Tributado", 39.9, "33049990", "", "", "", "", "", "", "", "", "", "", "", ""],
 ];
 
 const NUM_COLUNAS = CABECALHO.length;

@@ -59,6 +59,13 @@ export function parsearAnexo(linhas: LinhaBruta[], colunas: AnexoColunas): Linha
     const ncmBruto = linha[colunas.ncm];
     const ncm = String(ncmBruto ?? "").replace(/\D/g, "");
     if (!ncm) continue;
+    // Descarta prefixos curtos demais (< 4 dígitos) ou longos demais (> 8) para
+    // ser um NCM/SH real. Isso é uma proteção contra coluna mal mapeada (ex.:
+    // número de item em vez de NCM) — um prefixo de 1-2 dígitos combinaria com
+    // uma fração enorme de produtos via `startsWith` em `buscarNoAnexo`,
+    // forçando ST para itens que não deveriam (ex.: cosméticos NCM 3303-3307
+    // sendo capturados por um "3" ou "33" residual de coluna errada).
+    if (ncm.length < 4 || ncm.length > 8) continue;
 
     const descricao =
       colunas.descricao !== undefined ? String(linha[colunas.descricao] ?? "").trim() || undefined : undefined;
