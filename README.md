@@ -58,7 +58,8 @@ app/globals.css         → design system (tema claro/escuro)
 app/components/         → componentes de UI (ver abaixo)
 
 lib/rules.ts            → motor de decisão fiscal
-lib/tables.ts           → padrões de Tributação, alíquotas de teste e tabela de sobrescritas por NCM
+lib/tables.ts           → padrões de Tributação, alíquotas de teste e tabela de sobrescritas de IBS/CBS por NCM
+lib/regras-federais.ts  → regime federal de PIS/COFINS por NCM (monofásico, alíquota zero, ST federal)
 lib/instructions.ts     → interpretação de instruções em português livre
 lib/anexos.ts           → leitura/mapeamento de anexos de ST
 lib/empresas.ts         → cadastro de empresas (persistência em localStorage)
@@ -72,11 +73,13 @@ public/                 → planilha-modelo.xlsx (exemplo de entrada, 30 linhas)
 scripts/                → script que gera a planilha-modelo
 ```
 
-O motor de regras (`lib/rules.ts`, `lib/tables.ts`, `lib/instructions.ts`,
-`lib/anexos.ts`) é isolado da interface de propósito, para facilitar que
-novas regras/exceções por NCM sejam adicionadas com o tempo. Para incluir
-um caso novo identificado na prática, adicione uma entrada em
-`NCM_OVERRIDES`, em `lib/tables.ts`.
+O motor de regras (`lib/rules.ts`, `lib/tables.ts`, `lib/regras-federais.ts`,
+`lib/instructions.ts`, `lib/anexos.ts`) é isolado da interface de propósito,
+para facilitar que novas regras/exceções por NCM sejam adicionadas com o
+tempo. Para incluir um caso novo de IBS/CBS identificado na prática,
+adicione uma entrada em `NCM_OVERRIDES` (`lib/tables.ts`); para um caso de
+regime federal de PIS/COFINS, adicione em `lib/regras-federais.ts` — são
+tabelas separadas porque tratam de obrigações e bases legais diferentes.
 
 ### Fluxo principal (`app/page.tsx`)
 
@@ -93,11 +96,19 @@ um caso novo identificado na prática, adicione uma entrada em
 Da mais forte para a mais fraca: **regra aprendida da empresa** (por NCM,
 Bloco de aprendizado) → **diretiva de instrução** do processamento (padrão
 forçado, redução por segmento) → **anexo ativo da empresa** (decide ST) →
-**sobrescrita por NCM** (`NCM_OVERRIDES`, incluindo entradas marcadas como
-`ambiguo`, que forçam dúvida) → **padrão de Tributação** (Tributado/ST,
-ajustado por regime cumulativo/não-cumulativo). Exclusão de segmento por
-instrução e NCM ambíguo sempre vencem tudo isso, virando
-`Dúvida — aguardando instrução` sem preencher nada.
+**sobrescrita de IBS/CBS por NCM** (`NCM_OVERRIDES`, incluindo entradas
+marcadas como `ambiguo`, que forçam dúvida) e, em paralelo para os campos de
+PIS/COFINS, **regra federal por NCM/Nome** (`lib/regras-federais.ts`,
+incluindo entradas ambíguas) → **padrão de Tributação** (Tributado/ST,
+ajustado por regime cumulativo/não-cumulativo) como último recurso. Exclusão
+de segmento por instrução, NCM ambíguo e regime federal ambíguo sempre
+vencem tudo isso, virando `Dúvida — aguardando instrução` sem preencher
+nada.
+
+`NCM_OVERRIDES` e `lib/regras-federais.ts` resolvem obrigações diferentes
+(IBS/CBS x PIS/COFINS federal, com bases legais e listas de NCM próprias) e
+por isso não têm campos em comum — um item pode ter redução de IBS/CBS sem
+ter regime federal especial de PIS/COFINS, e vice-versa.
 
 ## Planilha de entrada
 
@@ -132,10 +143,15 @@ parcial.
   para que nenhuma sobrescrita interna force ST à revelia do anexo vigente.
 - **Não tributado / Isento** → nada é preenchido automaticamente; a linha é
   sempre marcada para revisão manual.
-- Sobrescritas por NCM (`lib/tables.ts`, tabela `NCM_OVERRIDES`) têm
-  prioridade sobre o padrão de Tributação para os campos que definem, exceto
-  quando um anexo de ST ativo da empresa ou uma regra aprendida dizem o
-  contrário (ver ordem de prioridade acima).
+- Sobrescritas de IBS/CBS por NCM (`lib/tables.ts`, tabela `NCM_OVERRIDES`)
+  têm prioridade sobre o padrão de Tributação para os campos que definem,
+  exceto quando um anexo de ST ativo da empresa ou uma regra aprendida dizem
+  o contrário (ver ordem de prioridade acima).
+- **CST PIS/COFINS, PIS, COFINS e NAT. RECEITA** são resolvidos por
+  `lib/regras-federais.ts` (monofásico, alíquota zero ou substituição
+  tributária federal por NCM, com desempate por palavra-chave no Nome
+  quando o NCM sozinho não decide) — ver seção seguinte para a lista
+  completa e as bases legais.
 - **ALIQ. FCP** é repasse para a maioria dos NCMs, mas o motor interpreta e
   preenche automaticamente **2%** para os NCMs de perfumaria/cosméticos da
   Bahia listados na Instrução Normativa SAT nº 005/2016 (`lib/tables.ts`,
@@ -147,6 +163,40 @@ parcial.
 - Se a linha já veio classificada pelo cliente, o motor **nunca sobrescreve**
   — só valida o formato do código (dígitos esperados) e a coerência com o
   padrão/sobrescrita aplicável, sinalizando divergência quando for o caso.
+
+### Regime federal de PIS/COFINS (`lib/regras-federais.ts`)
+
+Sortimento típico de supermercado, cada categoria com base legal citada no
+código para defesa em fiscalização. Quando uma regra é aplicada, a
+Observação da linha mostra o regime e a base legal (ex.: "PIS/COFINS:
+Monofásico — Lei nº 10.147/2000...").
+
+| Regime | CST | Categorias | Base legal |
+| --- | --- | --- | --- |
+| Monofásico (alíquota zero na revenda) | 04 | Cosméticos/perfumaria/higiene (cap. 33, escovas dentais 9603.21), bebidas frias (águas, refrigerantes, isotônicos, energéticos, cerveja — 2201-2203), autopeças (pneus, câmaras de ar, peças de veículo — 4011/4013/8708/9026/9029/9031/9032), combustíveis (2710/2711), lenços de papel e fraldas/absorventes (4818.20/4818.40) | Lei nº 10.147/2000; Lei nº 10.833/2003 art. 58; Lei nº 10.485/2002; Lei nº 9.718/1998 |
+| Alíquota zero | 06 | Cesta básica federal (feijão, arroz, farinhas, pão comum, leite, ovos, carnes frescas de boi/porco/aves, peixes frescos, óleo de soja, manteiga), sabão em barra (3401.19), papel higiênico folha simples (4818.10) | Lei nº 10.925/2004, art. 1º |
+| Substituição tributária federal | 05 | Cigarros (2402) | Lei nº 9.532/1997, art. 53 |
+| Tributado normal (fallback) | 01 | Todo o resto — PIS 1,65% / COFINS 7,6% (ou 0,65%/3% no regime cumulativo) | — |
+
+Casos que exigem cuidado extra, sempre documentados em comentário no código:
+
+- **Escovas (capítulo 9603)**: só a dental (9603.21) é monofásica; de
+  cabelo/roupa/limpeza (9603.29) é tributada normalmente. O NCM completo já
+  desambigua a maioria dos casos; quando vem truncado só em "9603", o motor
+  usa palavra-chave no Nome ("dental"/"dente"/"oral" → monofásico;
+  "cabelo"/"roupa"/"limpeza" → normal) e vira Dúvida se nem assim decidir.
+- **4818 (papel/celulose)**: 4818.10 é alíquota zero, mas 4818.20 e 4818.40
+  são monofásicos — um NCM truncado em "4818" sem o subitem vira Dúvida.
+- **3401 (sabões)**: 3401.19 (sabão em barra) é alíquota zero; o resto do
+  capítulo (sabonetes) é monofásico.
+- **0210 (carnes salgadas/em salmoura/secas/defumadas)**: só alguns
+  subitens têm alíquota zero pela Lei nº 10.925/2004 — o motor nunca
+  presume para o capítulo inteiro e sempre vira Dúvida, pedindo o subitem
+  exato.
+- A lista de cesta básica federal (PIS/COFINS) **não é idêntica** à lista de
+  cesta básica do IBS/CBS em `NCM_OVERRIDES` — são obrigações com bases
+  legais diferentes (Lei nº 10.925/2004 x LC nº 214/2025), então um NCM pode
+  ter redução de IBS/CBS sem ter alíquota zero de PIS/COFINS, ou vice-versa.
 
 A saída mantém o mesmo layout (título mesclado, aba e cabeçalho originais
 intactos), com duas colunas adicionais: **Status** (`OK`, `Preenchido
@@ -267,21 +317,34 @@ automaticamente um novo deploy.
 ## Manutenção das regras fiscais
 
 - `lib/tables.ts` contém os padrões de Tributação (`PADRAO_TRIBUTADO`,
-  `PADRAO_ST`), a tabela aberta `NCM_OVERRIDES` (onde podem ser cadastradas
-  regras específicas por NCM, ex.: um produto monofásico, um item de anexo
-  da LC nº 214/2025, sem alterar o motor genérico em `lib/rules.ts`) e a
-  lista de FCP 2% de cosméticos da Bahia (`avaliarFcpCosmeticos`, IN SAT nº
-  005/2016) — inclusive suas exceções por palavra-chave no Nome.
-- A decisão de **Substituição Tributária nunca deve ir para `NCM_OVERRIDES`**
-  — isso é intencional (o tipo `OverrideClassificacao` não tem campos de
-  CFOP/CST ICMS). ST é sempre responsabilidade dos anexos da empresa
-  (`lib/anexos.ts`); para tirar ou incluir uma categoria da ST, atualize o
-  anexo, não o código.
+  `PADRAO_ST`), a tabela aberta `NCM_OVERRIDES` de **IBS/CBS** (onde podem
+  ser cadastradas regras específicas por NCM, ex.: um item de anexo da LC nº
+  214/2025, sem alterar o motor genérico em `lib/rules.ts`) e a lista de FCP
+  2% de cosméticos da Bahia (`avaliarFcpCosmeticos`, IN SAT nº 005/2016) —
+  inclusive suas exceções por palavra-chave no Nome.
+- `lib/regras-federais.ts` contém a tabela aberta de regime federal de
+  **PIS/COFINS** por NCM (monofásico, alíquota zero, ST federal). É
+  deliberadamente separada de `NCM_OVERRIDES` — são obrigações diferentes,
+  com listas de NCM e bases legais próprias, e um item pode se encaixar
+  numa sem se encaixar na outra.
+- A decisão de **Substituição Tributária (ICMS) nunca deve ir para
+  `NCM_OVERRIDES`** — isso é intencional (o tipo `OverrideClassificacao` não
+  tem campos de CFOP/CST ICMS, nem de PIS/COFINS). ST de ICMS é sempre
+  responsabilidade dos anexos da empresa (`lib/anexos.ts`); para tirar ou
+  incluir uma categoria da ST, atualize o anexo, não o código. Já a "ST
+  federal" de PIS/COFINS (CST 05, ex.: cigarros) é uma obrigação diferente e
+  vive em `lib/regras-federais.ts`.
+- Toda entrada nova em `lib/regras-federais.ts` precisa citar a base legal
+  (lei/artigo) em comentário E no campo `baseLegal` — ela aparece na
+  Observação da linha classificada, para o analista fiscal defender a
+  classificação em uma fiscalização.
 - Sempre que uma regra nova for identificada na prática contábil (um NCM, um
   padrão de Tributação diferente), descreva o caso (NCM ou prefixo, campos
-  afetados, base legal) para que `NCM_OVERRIDES`/FCP seja atualizado.
-- Depois de mudar `lib/tables.ts` ou `lib/rules.ts`, rode `npm test` e
-  regenere a planilha-modelo (`npm run gerar-modelo`) antes de publicar.
+  afetados, base legal) para que `NCM_OVERRIDES`, `lib/regras-federais.ts`
+  ou a lista de FCP seja atualizada.
+- Depois de mudar `lib/tables.ts`, `lib/regras-federais.ts` ou `lib/rules.ts`,
+  rode `npm test` e regenere a planilha-modelo (`npm run gerar-modelo`)
+  antes de publicar.
 
 ## Limitações conhecidas
 
@@ -329,3 +392,20 @@ automaticamente um novo deploy.
   anexo com "1806900") não casa, e o produto segue sem a confirmação do
   anexo. Nesses casos a linha fica com a divergência de dígitos sinalizada
   para conferência manual do NCM completo.
+- A tabela de regime federal de PIS/COFINS (`lib/regras-federais.ts`) cobre
+  o sortimento típico de supermercado citado no escopo deste projeto
+  (cosméticos, bebidas frias, autopeças, combustíveis, cesta básica federal,
+  cigarros); novos NCMs/categorias devem ser cadastrados conforme
+  identificados no uso real, sempre citando a base legal. Ela não cobre
+  todo o universo de regimes especiais de PIS/COFINS do Direito Tributário
+  federal — só o que é relevante para o sortimento de supermercado na
+  Bahia.
+- A lista de cesta básica federal (Lei nº 10.925/2004) implementada é
+  deliberadamente mais estreita que a lista de cesta básica do IBS/CBS em
+  `NCM_OVERRIDES` (ex.: açúcar, sal e café não estão na lista federal de
+  PIS/COFINS) — reflete diferenças reais entre as duas leis, não é uma
+  omissão a corrigir sem confirmar a base legal antes.
+- NCM 0210 (carnes salgadas/em salmoura/secas/defumadas) sempre vira Dúvida
+  por decisão deliberada: só alguns subitens da Lei nº 10.925/2004 têm
+  alíquota zero, e o sistema não presume qual sem o NCM completo de 8
+  dígitos.

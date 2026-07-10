@@ -66,15 +66,17 @@ export type PadraoTributacao = typeof PADRAO_TRIBUTADO;
  * for necessário sinalizar aqui que um NCM É objeto de ST, isso deve ser
  * feito cadastrando o NCM em um anexo — nunca adicionando campos de CFOP/CST
  * ICMS a este tipo.
+ *
+ * Também NÃO tem campos de PIS/COFINS (`cstPisCofins`/`pis`/`cofins`/
+ * `natReceita`) de propósito — o regime federal de PIS/COFINS é uma
+ * obrigação distinta do IBS/CBS (bases legais e listas de NCM diferentes) e
+ * vive em `lib/regras-federais.ts`, para não duplicar/conflitar decisões
+ * entre as duas tabelas.
  */
 export interface OverrideClassificacao {
   cstIbsCbs?: string;
   cclasstrib?: string;
   redBc?: number | null;
-  cstPisCofins?: string;
-  pis?: number;
-  cofins?: number;
-  natReceita?: string;
   observacao: string;
   /**
    * Quando true, o NCM é sabidamente ambíguo (o mesmo código cobre
@@ -104,7 +106,9 @@ export interface NcmOverrideEntry {
 export const NCM_OVERRIDES: NcmOverrideEntry[] = [
   // ---------------------------------------------------------------------
   // Cesta básica nacional — redução de 100% no IBS/CBS (LC nº 214/2025,
-  // Anexo I) e alíquota zero de PIS/COFINS (Lei nº 10.925/2004, art. 1º).
+  // Anexo I). O regime federal de PIS/COFINS desses mesmos NCMs (que usa
+  // uma lista própria, não idêntica a esta) é resolvido separadamente em
+  // lib/regras-federais.ts.
   // ---------------------------------------------------------------------
   {
     prefixos: [
@@ -129,10 +133,7 @@ export const NCM_OVERRIDES: NcmOverrideEntry[] = [
       cstIbsCbs: "200",
       cclasstrib: "200003",
       redBc: 100,
-      cstPisCofins: "06",
-      pis: 0,
-      cofins: 0,
-      observacao: "Cesta básica nacional — redução de 100% no IBS/CBS e alíquota zero de PIS/COFINS.",
+      observacao: "Cesta básica nacional — redução de 100% no IBS/CBS (LC nº 214/2025, Anexo I).",
     },
   },
 
@@ -150,12 +151,7 @@ export const NCM_OVERRIDES: NcmOverrideEntry[] = [
       cstIbsCbs: "200",
       cclasstrib: "200036",
       redBc: 60,
-      cstPisCofins: "04",
-      pis: 0,
-      cofins: 0,
-      natReceita: "002",
-      observacao:
-        "Higiene bucal (creme dental etc.) — redução 60% no IBS/CBS e monofásico de PIS/COFINS (Lei nº 10.147/2000).",
+      observacao: "Higiene bucal (creme dental etc.) — redução 60% no IBS/CBS.",
     },
   },
   {
@@ -186,42 +182,6 @@ export const NCM_OVERRIDES: NcmOverrideEntry[] = [
       ambiguo: true,
       observacao:
         'NCM 9619 cobre tanto absorventes higiênicos (redução 60% no IBS/CBS) quanto fraldas — confirme a descrição do produto antes de classificar.',
-    },
-  },
-
-  // ---------------------------------------------------------------------
-  // Monofásicos de PIS/COFINS — CST 04, alíquota zero na revenda (Lei nº
-  // 10.147/2000 — cosméticos/higiene; Lei nº 13.097/2015 — bebidas frias).
-  // (3306 já tratado acima, combinado com a redução de 60% do IBS/CBS.)
-  // ---------------------------------------------------------------------
-  {
-    prefixos: ["3303", "3304", "3305", "3307"], // perfumaria, maquiagem, cosméticos capilares e outros
-    override: {
-      cstPisCofins: "04",
-      pis: 0,
-      cofins: 0,
-      natReceita: "002",
-      observacao: "Cosméticos/perfumaria — monofásico, revenda a alíquota zero.",
-    },
-  },
-  {
-    prefixos: ["2202"], // refrigerantes e outras bebidas não alcoólicas
-    override: {
-      cstPisCofins: "04",
-      pis: 0,
-      cofins: 0,
-      natReceita: "002",
-      observacao: "Refrigerantes — monofásico, revenda a alíquota zero (bebidas frias).",
-    },
-  },
-  {
-    prefixos: ["2203"], // cerveja de malte
-    override: {
-      cstPisCofins: "04",
-      pis: 0,
-      cofins: 0,
-      natReceita: "002",
-      observacao: "Cerveja — monofásico, revenda a alíquota zero (bebidas frias).",
     },
   },
 ];
