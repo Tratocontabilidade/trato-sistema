@@ -717,5 +717,132 @@ teste("Sal (NCM 25010020) -> CST 06 alíquota zero", () => {
   assert.equal(r.cstPisCofins, "06");
 });
 
+console.log("\n=== Benefícios fiscais de ICMS-BA — operações internas (Art. 265/268 RICMS-BA, Art. 16 Lei 7.014/96) ===");
+
+const casosIcmsBa: { nome: string; ncm: string; cstEsperado: string; descricao: string }[] = [
+  { nome: "TOMATE CEREJA 500G", ncm: "07020000", cstEsperado: "040", descricao: "isento hortifrúti" },
+  { nome: "BATATA INGLESA KG", ncm: "07019000", cstEsperado: "040", descricao: "isento hortifrúti" },
+  { nome: "ALHO NACIONAL 200G", ncm: "07032010", cstEsperado: "000", descricao: "exceção expressa - alho" },
+  { nome: "MAÇÃ FUJI KG", ncm: "08081000", cstEsperado: "040", descricao: "isento hortifrúti" },
+  { nome: "CASTANHA DE CAJU 200G", ncm: "08013200", cstEsperado: "000", descricao: "exceção expressa - castanha" },
+  { nome: "FEIJÃO CARIOCA 1KG", ncm: "07133399", cstEsperado: "040", descricao: "isento Art. 265 II c" },
+  { nome: "ARROZ TIO JOÃO 5KG", ncm: "10063021", cstEsperado: "040", descricao: "isento Art. 265 II c" },
+  { nome: "FARINHA DE MANDIOCA 1KG", ncm: "11062000", cstEsperado: "040", descricao: "isento Art. 265 II b" },
+  { nome: "SAL REFINADO CISNE 1KG", ncm: "25010020", cstEsperado: "040", descricao: "isento Art. 265 II d" },
+  { nome: "OVO BRANCO GRANDE 30 UNID", ncm: "04072100", cstEsperado: "040", descricao: "isento Art. 265 II k" },
+  {
+    nome: "LEITE PASTEURIZADO INTEGRAL 1L",
+    ncm: "04012010",
+    cstEsperado: "040",
+    descricao: "isento (pasteurizado)",
+  },
+  { nome: "LEITE UHT ITAMBÉ 1L", ncm: "04012010", cstEsperado: "000", descricao: "não isento (UHT)" },
+  { nome: "OLEO DE SOJA SOYA 900ML", ncm: "15079019", cstEsperado: "020", descricao: "redução carga 12%" },
+  { nome: "MACARRÃO ESPAGUETE ADRIA 500G", ncm: "19021900", cstEsperado: "000", descricao: "alíquota 7% (nota)" },
+  { nome: "SALMÃO FRESCO KG", ncm: "03021400", cstEsperado: "020", descricao: "peixe, redução carga 12%" },
+  {
+    nome: "TOMATE PELADO ITALIANO 400G LATA",
+    ncm: "20029000",
+    cstEsperado: "000",
+    descricao: "industrializado, não é hortifrúti",
+  },
+  {
+    nome: "SUCO DE LARANJA NATURAL ONE 1L",
+    ncm: "20091100",
+    cstEsperado: "000",
+    descricao: "industrializado, não é hortifrúti",
+  },
+];
+
+for (const caso of casosIcmsBa) {
+  teste(`${caso.nome} (NCM ${caso.ncm}) -> CST ICMS ${caso.cstEsperado} (${caso.descricao})`, () => {
+    const r = classificarProdutoCliente(
+      produto({ nome: caso.nome, ncm: caso.ncm, ncmOriginal: caso.ncm, tributacao: "Tributado" }),
+      contextoPadrao
+    );
+    assert.equal(r.cstIcms, caso.cstEsperado, `veio ${r.cstIcms}, observação: ${r.observacao}`);
+  });
+}
+
+teste("Macarrão (NCM 1902) leva a nota de alíquota 7% na Observação, mesmo com CST 000", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "MACARRÃO ESPAGUETE ADRIA 500G", ncm: "19021900", ncmOriginal: "19021900", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.ok(r.observacao.includes("Alíquota 7%"), r.observacao);
+  assert.ok(r.observacao.includes("Lei 7.014/96"), r.observacao);
+});
+
+teste("Isenção hortifrúti mostra a base legal na Observação", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "TOMATE CEREJA 500G", ncm: "07020000", ncmOriginal: "07020000", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.ok(r.observacao.includes("Art. 265, I 'a'"), r.observacao);
+});
+
+teste("NCM 0703 truncado (4 dígitos, sem saber se é alho) -> Dúvida, nunca presume", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "CEBOLINHA ALHO VARIADOS", ncm: "0703", ncmOriginal: "0703", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.status, "Dúvida — aguardando instrução");
+});
+
+teste("Hortifrúti fresco com nome indicando produto industrializado (mesmo caindo no NCM 07/08) -> Dúvida", () => {
+  const r = classificarProdutoCliente(
+    produto({
+      nome: "MILHO VERDE EM CONSERVA 200G",
+      ncm: "07099000",
+      ncmOriginal: "07099000",
+      tributacao: "Tributado",
+    }),
+    contextoPadrao
+  );
+  assert.equal(r.status, "Dúvida — aguardando instrução");
+});
+
+teste("Benefício de ICMS-BA nunca se aplica quando o produto é ST (anexo vence)", () => {
+  const stBa2026 = anexo("ST-BA 2026", ["07020000"]); // hipotético — anexo confirmando ST para o NCM do tomate
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [stBa2026] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "TOMATE CEREJA 500G", ncm: "07020000", ncmOriginal: "07020000", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5405");
+  assert.equal(r.cstIcms, "060");
+});
+
+teste("Regra aprendida NUNCA sobrescreve o benefício de ICMS-BA (cstIcms continua bloqueado)", () => {
+  const contexto: ContextoClassificacao = {
+    ...contextoPadrao,
+    regrasAprendidas: [
+      {
+        ncm: "07020000",
+        campo: "cstIcms",
+        valorAnterior: "040",
+        valorNovo: "000",
+        origem: "correção manual aprovada por engano",
+        aprovadoEm: new Date().toISOString(),
+      },
+    ],
+  };
+  const r = classificarProdutoCliente(
+    produto({ nome: "TOMATE CEREJA 500G", ncm: "07020000", ncmOriginal: "07020000", tributacao: "Tributado" }),
+    contexto
+  );
+  // A isenção do Art. 265 continua valendo — regra aprendida não pode mexer em cstIcms.
+  assert.equal(r.cstIcms, "040");
+});
+
+teste("Leite de cabra (Art. 265 I h) tem prioridade sobre a regra geral de leite pasteurizado/UHT", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "LEITE DE CABRA INTEGRAL UHT 1L", ncm: "04019000", ncmOriginal: "04019000", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.cstIcms, "040");
+  assert.ok(r.observacao.includes("I 'h'"), r.observacao);
+});
+
 console.log(`\n${passou} passaram, ${falhou} falharam.\n`);
 if (falhou > 0) process.exit(1);

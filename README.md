@@ -97,27 +97,32 @@ Da mais forte para a mais fraca: **regra aprendida da empresa** (por NCM,
 Bloco de aprendizado) → **diretiva de instrução** do processamento (padrão
 forçado, redução por segmento) → **anexo ativo da empresa** (decide ST) →
 **sobrescrita de IBS/CBS por NCM** (`NCM_OVERRIDES`, incluindo entradas
-marcadas como `ambiguo`, que forçam dúvida) e, em paralelo para os campos de
+marcadas como `ambiguo`, que forçam dúvida), em paralelo para os campos de
 PIS/COFINS, **regra federal por NCM/Nome** (`lib/regras-federais.ts`,
-incluindo entradas ambíguas) → **padrão de Tributação** (Tributado/ST,
-ajustado por regime cumulativo/não-cumulativo) como último recurso. Exclusão
-de segmento por instrução, NCM ambíguo e regime federal ambíguo sempre
-vencem tudo isso, virando `Dúvida — aguardando instrução` sem preencher
-nada.
+incluindo entradas ambíguas), e, para o CST ICMS de produtos que não são ST,
+**benefício fiscal de ICMS-BA** (`avaliarBeneficioIcmsBa`, isenção/redução
+para operações internas, incluindo casos ambíguos) → **padrão de
+Tributação** (Tributado/ST, ajustado por regime cumulativo/não-cumulativo)
+como último recurso. Exclusão de segmento por instrução, NCM ambíguo,
+regime federal ambíguo e benefício de ICMS-BA ambíguo sempre vencem tudo
+isso, virando `Dúvida — aguardando instrução` sem preencher nada.
 
-`NCM_OVERRIDES` e `lib/regras-federais.ts` resolvem obrigações diferentes
-(IBS/CBS x PIS/COFINS federal, com bases legais e listas de NCM próprias) e
-por isso não têm campos em comum — um item pode ter redução de IBS/CBS sem
-ter regime federal especial de PIS/COFINS, e vice-versa.
+`NCM_OVERRIDES`, `lib/regras-federais.ts` e `avaliarBeneficioIcmsBa`
+resolvem obrigações diferentes (IBS/CBS, PIS/COFINS federal e ICMS
+estadual, cada uma com base legal e lista de NCM próprias) e por isso não
+têm campos em comum — um item pode ter redução de IBS/CBS sem ter regime
+federal especial de PIS/COFINS nem benefício de ICMS-BA, e vice-versa.
 
 **Exceção estrutural:** CFOP SAIDAS e CST ICMS (os dois campos que decidem
-ST) **nunca** aceitam regra aprendida, mesmo que exista uma salva para o
-NCM — a única autoridade para ST é o anexo ativo (ou, na ausência de anexo,
-a coluna Tributação da planilha, validada normalmente). Isso evita que uma
+ST **e** os benefícios fiscais de ICMS-BA) **nunca** aceitam regra
+aprendida, mesmo que exista uma salva para o NCM — a única autoridade para
+esses dois campos é o anexo ativo (ST), a coluna Tributação (validada
+normalmente) e a tabela de benefícios de ICMS-BA. Isso evita que uma
 correção aprovada por engano no fluxo de aprendizado (ex.: "Aprovar todas
-do mesmo NCM" clicado errado) trave um NCM em ST — ou fora de ST — para
-sempre, por fora do anexo vigente. Por isso a tela "Aprender com correção"
-também não oferece mais esses dois campos para aprendizado.
+do mesmo NCM" clicado errado) trave um NCM em ST — ou anule uma isenção —
+para sempre, por fora das fontes de verdade vigentes. Por isso a tela
+"Aprender com correção" também não oferece mais esses dois campos para
+aprendizado.
 
 ## Planilha de entrada
 
@@ -161,6 +166,9 @@ parcial.
   tributária federal por NCM, com desempate por palavra-chave no Nome
   quando o NCM sozinho não decide) — ver seção seguinte para a lista
   completa e as bases legais.
+- **CST ICMS**, quando o produto não é ST, também pode ser sobrescrito por
+  um benefício fiscal de ICMS-BA para operações internas (isenção, redução
+  de base de cálculo) — ver "Benefícios fiscais de ICMS-BA" abaixo.
 - **ALIQ. FCP** é repasse para a maioria dos NCMs, mas o motor interpreta e
   preenche automaticamente **2%** para os NCMs de perfumaria/cosméticos da
   Bahia listados na Instrução Normativa SAT nº 005/2016 (`lib/tables.ts`,
@@ -206,6 +214,47 @@ Casos que exigem cuidado extra, sempre documentados em comentário no código:
   cesta básica do IBS/CBS em `NCM_OVERRIDES` — são obrigações com bases
   legais diferentes (Lei nº 10.925/2004 x LC nº 214/2025), então um NCM pode
   ter redução de IBS/CBS sem ter alíquota zero de PIS/COFINS, ou vice-versa.
+
+### Benefícios fiscais de ICMS-BA (`lib/tables.ts`, `avaliarBeneficioIcmsBa`)
+
+Isenção, redução de base de cálculo e alíquota reduzida de **ICMS**, só para
+operações **internas** na Bahia (CFOP 5xxx) — interestaduais ficam para um
+ciclo futuro. Sobrescreve o CST ICMS 000 padrão quando o produto não é ST
+(o anexo ativo sempre decide ST primeiro, por cima de qualquer benefício).
+
+| Regime | CST | Categorias | Base legal |
+| --- | --- | --- | --- |
+| Isenção | 040 | Hortifrutícolas frescos (cap. 07/08, exceto alho e castanhas/nozes/amêndoas/avelãs), leite pasteurizado tipo A/B ou magro (não o UHT), leite de cabra, farinha de mandioca, arroz, feijão, sal, fubá/farinha de milho, ovos, polpa de cacau | Art. 265, incisos I e II, do RICMS-BA (Decreto nº 13.780/2012) |
+| Redução de BC (carga 12%) | 020 | Óleo refinado de soja/algodão, peixes e carnes de peixe | Art. 268, XXII e LXIX, do RICMS-BA |
+| Alíquota reduzida 7% | 000 (nota na Observação) | Macarrão (NCM 1902) | Art. 16, I "a", da Lei nº 7.014/96 |
+
+**Princípio de interpretação**: quando a Lei nº 7.014/96 previa alíquota
+reduzida de 7% e o RICMS-BA (norma mais recente e mais específica) depois
+previu isenção para o mesmo produto, prevalece a **isenção** — por isso o
+Art. 265 é sempre consultado primeiro; só o macarrão manteve a alíquota
+residual de 7% (nunca migrou para isenção).
+
+Casos que exigem cuidado extra, sempre documentados em comentário no código:
+
+- **Leite (NCM 0401.20)**: o mesmo NCM cobre pasteurizado (isento) e UHT/
+  longa vida (não isento) — só o Nome distingue ("pasteurizado"/"tipo A"/
+  "tipo B"/"magro" → isento; "UHT"/"longa vida" → não isento). Sem nenhum
+  dos dois sinais no Nome, vira Dúvida.
+- **Alho (dentro de 0703)**: cebola, alho-poró e outros produtos da mesma
+  posição são isentos, mas alho é exceção expressa — precisa dos 6 dígitos
+  do NCM para diferenciar; um NCM truncado em "0703" vira Dúvida.
+- **Castanhas, nozes, amêndoas e avelãs (posições 0801/0802 inteiras)**:
+  exceção expressa da isenção de frutas frescas — nunca isentas por essa
+  regra, mesmo com NCM na faixa de frutas.
+- Se o Nome de um produto do capítulo 07/08 sugerir industrialização
+  ("conserva", "seco", "desidratado", "enlatado", "em calda",
+  "cristalizado"), a linha vira Dúvida em vez de aplicar a isenção — o
+  conflito entre NCM (fresco) e Nome (processado) precisa de confirmação
+  humana.
+- Assim como CFOP SAIDAS, **CST ICMS nunca aceita regra aprendida** — nem
+  mesmo para "corrigir" um benefício fiscal. Se um benefício estiver saindo
+  errado, revise a tabela `avaliarBeneficioIcmsBa` em `lib/tables.ts`, não o
+  fluxo de aprendizado.
 
 ### Inferência de NCM por Nome (`lib/tables.ts`, `INFERENCIA_NCM_POR_NOME`)
 
@@ -371,6 +420,12 @@ automaticamente um novo deploy.
   possível) e nunca eliminar o status dedicado de inferência — a inferência
   existe para reduzir Dúvidas evitáveis, não para fingir que o NCM veio do
   cliente.
+- `lib/tables.ts` também contém `avaliarBeneficioIcmsBa` — benefícios
+  fiscais de **ICMS** (isenção Art. 265, redução de BC Art. 268, alíquota
+  reduzida Art. 16 da Lei nº 7.014/96) para operações internas na Bahia. É
+  deliberadamente separada de `NCM_OVERRIDES` (IBS/CBS) e de
+  `lib/regras-federais.ts` (PIS/COFINS) — três obrigações diferentes, três
+  tabelas diferentes, cada uma com sua base legal e lista de NCM.
 - A decisão de **Substituição Tributária (ICMS) nunca deve ir para
   `NCM_OVERRIDES`** — isso é intencional (o tipo `OverrideClassificacao` não
   tem campos de CFOP/CST ICMS, nem de PIS/COFINS). ST de ICMS é sempre
@@ -378,14 +433,14 @@ automaticamente um novo deploy.
   incluir uma categoria da ST, atualize o anexo, não o código. Já a "ST
   federal" de PIS/COFINS (CST 05, ex.: cigarros) é uma obrigação diferente e
   vive em `lib/regras-federais.ts`.
-- Toda entrada nova em `lib/regras-federais.ts` precisa citar a base legal
-  (lei/artigo) em comentário E no campo `baseLegal` — ela aparece na
-  Observação da linha classificada, para o analista fiscal defender a
-  classificação em uma fiscalização.
+- Toda entrada nova em `lib/regras-federais.ts` e em `avaliarBeneficioIcmsBa`
+  precisa citar a base legal (lei/artigo) em comentário E na `observacao`
+  retornada — ela aparece na Observação da linha classificada, para o
+  analista fiscal defender a classificação em uma fiscalização.
 - Sempre que uma regra nova for identificada na prática contábil (um NCM, um
   padrão de Tributação diferente), descreva o caso (NCM ou prefixo, campos
-  afetados, base legal) para que `NCM_OVERRIDES`, `lib/regras-federais.ts`
-  ou a lista de FCP seja atualizada.
+  afetados, base legal) para que `NCM_OVERRIDES`, `lib/regras-federais.ts`,
+  `avaliarBeneficioIcmsBa` ou a lista de FCP seja atualizada.
 - Depois de mudar `lib/tables.ts`, `lib/regras-federais.ts` ou `lib/rules.ts`,
   rode `npm test` e regenere a planilha-modelo (`npm run gerar-modelo`)
   antes de publicar.
@@ -467,3 +522,15 @@ automaticamente um novo deploy.
   posterior mantém o que já estava salvo; confira o campo "Regime
   tributário" de clientes cadastrados em versões anteriores do sistema se
   houver dúvida sobre as alíquotas de PIS/COFINS aplicadas.
+- Os benefícios fiscais de ICMS-BA (`avaliarBeneficioIcmsBa`) cobrem só
+  **operações internas na Bahia** (CFOP 5xxx) — o escopo deste ciclo,
+  conforme o perfil do Everildo (só vendas dentro do estado). Operações
+  interestaduais (CFOP 6xxx) não são tratadas por essa tabela ainda; um NCM
+  isento internamente não deve ser presumido isento numa venda
+  interestadual sem confirmar a legislação aplicável.
+- A lista de NCM/palavra-chave dos benefícios de ICMS-BA cobre o sortimento
+  citado no escopo deste ciclo (hortifrutícolas, leite, arroz/feijão, sal,
+  farinha, ovos, óleo, peixes, macarrão); o RICMS-BA (Art. 265/268) tem
+  outros incisos e alíneas não cobertos aqui — novas categorias devem ser
+  adicionadas conforme identificadas no uso real, sempre citando o
+  inciso/alínea exato.
