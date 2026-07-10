@@ -108,11 +108,12 @@ as 19 colunas abaixo (nesta ordem):
 
 | Coluna | Observação |
 | --- | --- |
-| Código, Nome, Código de barras, UN, Preço unit., ALIQ. FCP | repassadas sem alteração |
+| Código, Nome, Código de barras, UN, Preço unit. | repassadas sem alteração |
 | Tributação | `Tributado`, `Substituição tributária`, `Não tributado` ou `Isento` |
-| NCM | aceita com ou sem pontos, ou incompleto — normalizado para só dígitos; se não tiver 8 dígitos, a linha é sinalizada |
+| NCM | aceita com ou sem pontos, ou incompleto — normalizado para só dígitos. **Vazio → `Dúvida — aguardando instrução`**, nada é preenchido (regra de ouro: sem NCM não dá para decidir ST/overrides). Com dígitos mas diferente de 8 (sujo/truncado) → ainda é classificado por casamento de prefixo contra anexos/`NCM_OVERRIDES`, com a linha sinalizada para conferência do NCM completo. |
 | CFOP SAIDAS, CST ICMS, CST PIS/COFINS, CST IBS/CBS, Cclasstrib | se vazios, preenchidos automaticamente; se já preenchidos, apenas validados |
 | PIS, COFINS, NAT. RECIETA, RED. B.C., IBS, CBS | idem — preenchidos ou validados conforme o padrão |
+| ALIQ. FCP | repassada sem alteração, exceto para cosméticos/perfumaria sujeitos ao FCP 2% da Bahia (ver seção seguinte) |
 
 Baixe `public/planilha-modelo.xlsx` (link "Baixar planilha-modelo" na
 própria interface) para ver um exemplo de cada situação: Tributado,
@@ -168,7 +169,11 @@ anexo. Quando a empresa tem pelo menos um anexo ativo, um NCM só é tratado
 como ST se constar nele; um valor legado de "Substituição tributária" na
 coluna Tributação do cliente nunca basta sozinho (ex.: se uma categoria
 deixa de ser ST por mudança na legislação, atualizar/remover o item do
-anexo é o que corrige a classificação — não é preciso mexer no código).
+anexo é o que corrige a classificação — não é preciso mexer no código). Essa
+checagem contra o anexo é feita por **casamento de prefixo**, então também
+funciona para um NCM sujo/truncado do cliente (ex.: "1806900" com 7 dígitos
+em vez de "18069000") — só um NCM **vazio** é tratado como impossível de
+decidir e vira Dúvida.
 
 No início de cada processamento, a tela **Instruções** também permite subir
 um **anexo de ST só para aquela rodada** (mesma detecção de colunas e
@@ -316,3 +321,11 @@ automaticamente um novo deploy.
   Dúvida em vez de arriscar; nomes fora do vocabulário reconhecido (ex.: uma
   grafia muito diferente de "protetor solar") não acionam a exceção e o
   produto recebe o FCP 2% padrão — confira manualmente casos de nome atípico.
+- O casamento de NCM contra anexos e `NCM_OVERRIDES` é por **prefixo**
+  (`startsWith`), então tolera um NCM do cliente mais curto que 8 dígitos
+  (ex.: um zero final faltando). Isso só funciona quando o NCM do cliente é
+  **igual ou mais longo** que o prefixo cadastrado no anexo/tabela — um NCM
+  do cliente mais curto que o prefixo relevante (ex.: cliente com "18" e o
+  anexo com "1806900") não casa, e o produto segue sem a confirmação do
+  anexo. Nesses casos a linha fica com a divergência de dígitos sinalizada
+  para conferência manual do NCM completo.

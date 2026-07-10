@@ -6,9 +6,11 @@
 // NCM (carnes, xampu/cosmético, escova dental, inseticida), cClassTrib com
 // quantidade errada de dígitos, linhas já classificadas corretamente (OK),
 // Não tributado/Isento (revisar manualmente), Tributação não reconhecida,
-// NCM sujo (com pontos, curto, vazio), preenchimento parcial e FCP 2% de
-// cosméticos na Bahia (IN SAT nº 005/2016): item elegível preenchido
-// automaticamente e item elegível com exceção pelo nome (protetor solar).
+// NCM sujo com pontos ou dígitos faltando (casado por prefixo, ainda
+// classificado), NCM vazio (Dúvida — aguardando instrução, nunca chuta ST),
+// preenchimento parcial e FCP 2% de cosméticos na Bahia (IN SAT nº
+// 005/2016): item elegível preenchido automaticamente e item elegível com
+// exceção pelo nome (protetor solar).
 //
 // Rode com: npm run gerar-modelo
 
@@ -91,7 +93,7 @@ const linhas: Linha[] = [
   // 22: NCM curto (5 dígitos) -> Divergência detectada (NCM inválido)
   ["1022", "Produto com NCM incompleto", "7891000000226", "UN", "Tributado", 10.0, "16185", "", "", "", "", "", "", "", "", "", "", "", ""],
 
-  // 23: NCM vazio -> Divergência detectada
+  // 23: NCM vazio -> Dúvida — aguardando instrução (regra de ouro: sem NCM não dá para decidir ST/overrides)
   ["1023", "Produto sem NCM informado", "7891000000233", "UN", "Tributado", 12.0, "", "", "", "", "", "", "", "", "", "", "", "", ""],
 
   // 24: PIS informado diferente do padrão -> Divergência detectada

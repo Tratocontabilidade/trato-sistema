@@ -296,26 +296,32 @@ export function classificarProdutoCliente(
     );
   }
 
+  const ncmDigitos = input.ncm;
+
+  // Regra de ouro: sem NCM não dá para saber se um produto é ST, se cai numa
+  // sobrescrita/redução, ou se consta em algum anexo — nenhum desses campos
+  // pode ser "chutado" a partir só da coluna Tributação. Sempre Dúvida.
+  if (!ncmDigitos) {
+    return construirResultadoDuvida(input, "NCM não informado — não é possível determinar CFOP/CST/ST sem o NCM.");
+  }
+
+  const ncmValido = ncmDigitos.length === 8;
   const pendencias: Pendencia[] = [];
   let algumAutofill = false;
 
-  const ncmDigitos = input.ncm;
-  const ncmValido = ncmDigitos.length === 8;
-  if (!ncmDigitos) {
-    pendencias.push({ peso: 2, mensagem: "NCM não informado." });
-  } else if (!ncmValido) {
+  if (!ncmValido) {
     pendencias.push({
       peso: 2,
-      mensagem: `NCM "${input.ncmOriginal}" tem ${ncmDigitos.length} dígito(s) (esperado 8) — sobrescritas por NCM podem não ter sido aplicadas.`,
+      mensagem: `NCM "${input.ncmOriginal}" tem ${ncmDigitos.length} dígito(s) (esperado 8) — classificado por casamento de prefixo; confirme o NCM completo.`,
     });
   }
 
   // NCM sabidamente ambíguo (lib/tables.ts): nunca classificar automaticamente.
-  if (ncmValido) {
-    const possivelAmbiguo = buscarOverridePorNcm(ncmDigitos);
-    if (possivelAmbiguo?.ambiguo) {
-      return construirResultadoDuvida(input, possivelAmbiguo.observacao);
-    }
+  // Usa casamento por prefixo (não exige os 8 dígitos exatos) para pegar também
+  // NCMs sujos/curtos que ainda assim caem num prefixo ambíguo conhecido.
+  const possivelAmbiguo = buscarOverridePorNcm(ncmDigitos);
+  if (possivelAmbiguo?.ambiguo) {
+    return construirResultadoDuvida(input, possivelAmbiguo.observacao);
   }
 
   const diretivaPadrao = contexto.diretivas.find(
@@ -346,8 +352,13 @@ export function classificarProdutoCliente(
   // Isso vale mesmo que uma regra tenha existido no passado e tenha sido revogada
   // (ex.: item 9-A do Anexo 1 do RICMS-BA revogado em 2026 para cosméticos): o anexo
   // vigente decide, não uma suposição interna do sistema.
+  // Casamento por prefixo (não exige os 8 dígitos exatos): um NCM sujo/curto
+  // (ex.: "1806900", 7 dígitos, faltando o zero final) ainda deve ser
+  // conferido contra o anexo — descartar essa checagem só porque o NCM não
+  // tem exatamente 8 dígitos é o que permitia a coluna Tributação (que pode
+  // trazer um valor desatualizado) decidir ST sozinha, sem confirmação.
   const anexosAtivos = (contexto.anexosAtivos ?? []).filter((a) => a.ativo);
-  const ncmNoAnexo = anexosAtivos.length > 0 && ncmValido ? buscarNoAnexo(ncmDigitos, anexosAtivos) : null;
+  const ncmNoAnexo = anexosAtivos.length > 0 ? buscarNoAnexo(ncmDigitos, anexosAtivos) : null;
   if (ncmNoAnexo !== null && (categoria === "tributado" || categoria === "st")) {
     if (ncmNoAnexo && categoria !== "st") {
       pendencias.push({ peso: 0, mensagem: "ST determinada pelo anexo ativo da empresa (NCM encontrado)." });
@@ -389,15 +400,17 @@ export function classificarProdutoCliente(
           : PADRAO_TRIBUTADO
         : null;
   // Sobrescritas por NCM só se aplicam sobre um padrão de Tributação existente.
-  const override = padraoBase && ncmValido ? buscarOverridePorNcm(ncmDigitos) : undefined;
+  // Casamento por prefixo — não exige os 8 dígitos exatos, pela mesma razão do anexo acima.
+  const override = padraoBase ? buscarOverridePorNcm(ncmDigitos) : undefined;
   if (override) {
     pendencias.push({ peso: 0, mensagem: `Sobrescrita por NCM aplicada: ${override.observacao}` });
   }
 
   // FCP 2% de cosméticos (Bahia, IN SAT nº 005/2016) — só avaliado para produtos que
   // já serão tributados (Padrão A/B); nunca aplica a isento/não tributado/desconhecido.
-  const avaliacaoFcp =
-    padraoBase && ncmValido ? avaliarFcpCosmeticos(ncmDigitos, String(input.nome ?? "")) : null;
+  // avaliarFcpCosmeticos já exige NCM de 8 dígitos exatos internamente (as faixas da IN
+  // SAT nº 005/2016 são sensíveis ao NCM completo) — aqui não é preciso repetir o gate.
+  const avaliacaoFcp = padraoBase ? avaliarFcpCosmeticos(ncmDigitos, String(input.nome ?? "")) : null;
   if (avaliacaoFcp?.ambiguo) {
     return construirResultadoDuvida(input, avaliacaoFcp.motivoAmbiguo!);
   }
