@@ -409,3 +409,179 @@ export function inferirNcmPorNome(nomeNormalizado: string): { ncm: string; descr
   }
   return null;
 }
+
+// ---------------------------------------------------------------------
+// Benefícios fiscais de ICMS-BA para operações INTERNAS (CFOP 5xxx) —
+// isenção (Art. 265 do RICMS-BA, Decreto nº 13.780/2012), redução de base
+// de cálculo (Art. 268 do RICMS-BA) e alíquota reduzida (Art. 16, I "a" da
+// Lei nº 7.014/96). Só se aplica quando o produto NÃO é ST (o anexo ativo
+// da empresa sempre vence — ver lib/rules.ts) e quando o produto já seria
+// tributado normalmente. Escopo deste ciclo: só operações internas na
+// Bahia; interestaduais ficam para um ciclo futuro.
+//
+// Princípio de interpretação: quando a Lei 7.014/96 previa alíquota
+// reduzida de 7% e o RICMS-BA (norma mais recente e mais específica)
+// depois previu isenção para o mesmo produto, prevalece a isenção — por
+// isso o Art. 265 é sempre consultado antes de aplicar a alíquota de 7%
+// residual (só macarrão, NCM 1902, não migrou para isenção).
+// ---------------------------------------------------------------------
+
+export interface AvaliacaoBeneficioIcmsBa {
+  /** Quando definido, sobrescreve o CST ICMS padrão ("000"). Omitido = mantém "000" (caso do macarrão, que só ganha nota de alíquota). */
+  cstIcms?: string;
+  /** Base legal citada na Observação da linha — obrigatória quando `ambiguo` não está marcado. */
+  observacao?: string;
+  /** Regra de ouro: NCM/Nome não permitem decidir com segurança — nunca chutar. */
+  ambiguo?: boolean;
+  motivoAmbiguo?: string;
+}
+
+const KEYWORDS_HORTIFRUTI_INDUSTRIALIZADO = [
+  "conserva",
+  "seco",
+  "desidratado",
+  "congelado industrializado",
+  "enlatado",
+  "em calda",
+  "cristalizado",
+];
+
+/**
+ * Hortifrutícolas frescos (Art. 265, I "a" — Conv. ICM 44/75): capítulos 07
+ * (hortaliças/legumes/tubérculos, posições 0701 a 0714) e 08 (frutas,
+ * posições 0801 a 0814), com exceção expressa de alho (dentro de 0703),
+ * amêndoas, avelãs, castanha e nozes (posições 0801 e 0802 inteiras).
+ */
+function avaliarHortifrutiIsento(ncmDigitos: string, nomeNormalizado: string): AvaliacaoBeneficioIcmsBa | null {
+  const capitulo = ncmDigitos.slice(0, 2);
+  if (capitulo !== "07" && capitulo !== "08") return null;
+  if (ncmDigitos.length < 4) return null; // curto demais até pra identificar a posição.
+
+  const posicao = ncmDigitos.slice(0, 4);
+
+  if (posicao === "0703") {
+    if (ncmDigitos.length < 6) {
+      return {
+        ambiguo: true,
+        motivoAmbiguo:
+          "NCM 0703 cobre cebola/alho-poró (isentos, Art. 265 I 'a') e alho (exceção expressa da mesma " +
+          "alínea) — o NCM veio sem os 6 dígitos necessários para distinguir; confirme o subitem completo.",
+      };
+    }
+    if (ncmDigitos.startsWith("070320")) return null; // alho — exceção expressa, segue Padrão A.
+  }
+  if (posicao === "0801" || posicao === "0802") return null; // castanhas/nozes/amêndoas/avelãs — exceção expressa.
+
+  if (KEYWORDS_HORTIFRUTI_INDUSTRIALIZADO.some((k) => nomeNormalizado.includes(k))) {
+    return {
+      ambiguo: true,
+      motivoAmbiguo:
+        "NCM está na faixa de hortifrutícolas frescos (Art. 265, I 'a' RICMS-BA), mas o Nome indica produto " +
+        "industrializado (conserva/seco/desidratado/enlatado/em calda/cristalizado) — confirme o NCM antes " +
+        "de aplicar a isenção.",
+    };
+  }
+
+  return { cstIcms: "040", observacao: "Isento - Art. 265, I 'a' RICMS-BA (hortifrutícola in natura)." };
+}
+
+/**
+ * Avalia benefícios fiscais de ICMS-BA para operações internas por NCM
+ * (casamento por prefixo) e, quando necessário, por palavra-chave no Nome
+ * (leite pasteurizado x UHT, polpa de cacau). Retorna `null` quando nada se
+ * aplica — o chamador segue com o Padrão A normalmente (CST 000).
+ */
+export function avaliarBeneficioIcmsBa(ncmDigitos: string, nomeNormalizado: string): AvaliacaoBeneficioIcmsBa | null {
+  if (!ncmDigitos) return null;
+
+  // Leite de cabra (Art. 265, I "h") — checado antes da regra de leite pasteurizado/UHT abaixo.
+  if (ncmDigitos.startsWith("0401") && nomeNormalizado.includes("cabra")) {
+    return { cstIcms: "040", observacao: "Isento - Art. 265, I 'h' RICMS-BA (leite de cabra)." };
+  }
+
+  // Leite pasteurizado tipos A/B ou magro (Art. 265, II "a") — NCM 0401.20. UHT/longa vida NÃO é
+  // isento (é alíquota zero federal de PIS/COFINS, tratado à parte, mas ICMS normal).
+  if (ncmDigitos.startsWith("040120")) {
+    const pasteurizado = /pasteurizad|\btipo a\b|\btipo b\b|\bmagro\b/.test(nomeNormalizado);
+    const uht = /\buht\b|longa vida/.test(nomeNormalizado);
+    if (pasteurizado && !uht) {
+      return {
+        cstIcms: "040",
+        observacao: "Isento - Art. 265, II 'a' RICMS-BA (leite pasteurizado tipo A/B ou magro).",
+      };
+    }
+    if (uht) return null; // Segue Padrão A normalmente.
+    return {
+      ambiguo: true,
+      motivoAmbiguo:
+        "NCM 0401.20 pode ser leite pasteurizado tipo A/B (isento, Art. 265 II 'a' RICMS-BA) ou UHT/longa " +
+        "vida (não isento) — o Nome não indica qual; confirme antes de classificar.",
+    };
+  }
+
+  // Farinha de mandioca (Art. 265, II "b").
+  if (ncmDigitos.startsWith("110620")) {
+    return { cstIcms: "040", observacao: "Isento - Art. 265, II 'b' RICMS-BA (farinha de mandioca)." };
+  }
+
+  // Arroz e feijão (Art. 265, II "c").
+  if (
+    ncmDigitos.startsWith("1006") ||
+    ncmDigitos.startsWith("071331") ||
+    ncmDigitos.startsWith("071332") ||
+    ncmDigitos.startsWith("071333") ||
+    ncmDigitos.startsWith("071335")
+  ) {
+    return { cstIcms: "040", observacao: "Isento - Art. 265, II 'c' RICMS-BA (arroz e feijão)." };
+  }
+
+  // Sal de cozinha, fubá de milho e farinha de milho (Art. 265, II "d").
+  if (ncmDigitos.startsWith("2501") || ncmDigitos.startsWith("110220") || ncmDigitos.startsWith("1103")) {
+    return {
+      cstIcms: "040",
+      observacao: "Isento - Art. 265, II 'd' RICMS-BA (sal de cozinha, fubá e farinha de milho).",
+    };
+  }
+
+  // Ovos (Art. 265, II "k").
+  if (ncmDigitos.startsWith("0407")) {
+    return { cstIcms: "040", observacao: "Isento - Art. 265, II 'k' RICMS-BA (ovos)." };
+  }
+
+  // Polpa de cacau (Art. 265, I "c") — só quando o Nome indica polpa (cacau em bruto/amêndoas não isento).
+  if (ncmDigitos.startsWith("1801") && nomeNormalizado.includes("polpa")) {
+    return { cstIcms: "040", observacao: "Isento - Art. 265, I 'c' RICMS-BA (polpa de cacau)." };
+  }
+
+  const hortifruti = avaliarHortifrutiIsento(ncmDigitos, nomeNormalizado);
+  if (hortifruti) return hortifruti;
+
+  // Redução de BC para carga tributária de 12% — óleo refinado de soja/algodão (Art. 268, XXII).
+  if (ncmDigitos.startsWith("150790") || ncmDigitos.startsWith("151229")) {
+    return {
+      cstIcms: "020",
+      observacao: "Redução BC - Art. 268 XXII RICMS-BA (carga 12%, óleo refinado de soja/algodão).",
+    };
+  }
+
+  // Redução de BC para carga tributária de 12% — peixes e carnes de peixe (Art. 268, LXIX).
+  if (
+    ncmDigitos.startsWith("0302") ||
+    ncmDigitos.startsWith("0303") ||
+    ncmDigitos.startsWith("0304") ||
+    ncmDigitos.startsWith("0305")
+  ) {
+    return {
+      cstIcms: "020",
+      observacao: "Redução BC - Art. 268 LXIX RICMS-BA (carga 12%, peixes e carnes de peixe).",
+    };
+  }
+
+  // Alíquota reduzida a 7% — macarrão (Art. 16, I "a", Lei nº 7.014/96). Não muda o CST (o layout do
+  // cliente não tem coluna de alíquota de ICMS) — só documenta a base legal na Observação.
+  if (ncmDigitos.startsWith("1902")) {
+    return { observacao: "Alíquota 7% - Art. 16, I 'a' Lei 7.014/96 (macarrão)." };
+  }
+
+  return null;
+}

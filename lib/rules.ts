@@ -22,6 +22,7 @@ import {
   PADRAO_TRIBUTADO_CUMULATIVO,
   PADRAO_ST,
   PADRAO_ST_CUMULATIVO,
+  avaliarBeneficioIcmsBa,
   avaliarFcpCosmeticos,
   buscarOverridePorNcm,
   inferirNcmPorNome,
@@ -445,6 +446,20 @@ export function classificarProdutoCliente(
     });
   }
 
+  // Benefícios fiscais de ICMS-BA (lib/tables.ts, avaliarBeneficioIcmsBa) — isenção
+  // (Art. 265 RICMS-BA), redução de base de cálculo (Art. 268 RICMS-BA) e alíquota
+  // reduzida (Art. 16 Lei 7.014/96), só para operações internas na Bahia (CFOP 5xxx).
+  // Só avaliado quando o produto é tributado normalmente — nunca ST: o anexo ativo da
+  // empresa (ou a coluna Tributação, na ausência de anexo) sempre decide ST primeiro,
+  // por cima de qualquer benefício fiscal.
+  const beneficioIcmsBa = categoria === "tributado" ? avaliarBeneficioIcmsBa(ncmDigitos, nomeNormalizado) : null;
+  if (beneficioIcmsBa?.ambiguo) {
+    return construirResultadoDuvida(input, beneficioIcmsBa.motivoAmbiguo!);
+  }
+  if (beneficioIcmsBa?.observacao) {
+    pendencias.push({ peso: 0, mensagem: beneficioIcmsBa.observacao });
+  }
+
   const diretivaReducao = contexto.diretivas.find(
     (d): d is Extract<Diretiva, { tipo: "reducao_segmento" }> =>
       d.tipo === "reducao_segmento" && produtoPertenceAoSegmento(nomeNormalizado, d.chave)
@@ -527,9 +542,10 @@ export function classificarProdutoCliente(
   }
 
   // cfopSaidas/cstIcms nunca consultam regraAprendida (ver comentário acima) — vêm só do
-  // padrão derivado da categoria já corrigida pelo anexo (ou pela Tributação, na ausência dele).
+  // padrão derivado da categoria já corrigida pelo anexo (ou pela Tributação, na ausência dele),
+  // com os benefícios fiscais de ICMS-BA (isenção/redução) tendo prioridade sobre o CST 000 padrão.
   const cfopSaidas = campoCodigo("CFOP SAIDAS", input.cfopSaidas, 4, padraoBase?.cfopSaidas);
-  const cstIcms = campoCodigo("CST ICMS", input.cstIcms, 3, padraoBase?.cstIcms);
+  const cstIcms = campoCodigo("CST ICMS", input.cstIcms, 3, beneficioIcmsBa?.cstIcms ?? padraoBase?.cstIcms);
   const cstPisCofins = campoCodigo(
     "CST PIS/COFINS",
     input.cstPisCofins,
