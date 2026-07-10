@@ -26,6 +26,7 @@ import {
   buscarOverridePorNcm,
   type AvaliacaoFcpCosmeticos,
 } from "./tables";
+import { resolverRegimeFederal } from "./regras-federais";
 import { produtoPertenceAoSegmento, type Diretiva } from "./instructions";
 import { buscarNoAnexo } from "./anexos";
 import type { ClientProdutoEntrada, ClientProdutoResultado, ContextoClassificacao, StatusLinha } from "./types";
@@ -415,6 +416,22 @@ export function classificarProdutoCliente(
     return construirResultadoDuvida(input, avaliacaoFcp.motivoAmbiguo!);
   }
 
+  // Regime federal de PIS/COFINS (lib/regras-federais.ts) — monofásico, alíquota
+  // zero ou ST federal por NCM+Nome. Tem prioridade sobre o Padrão A/B (CST 01)
+  // para CST PIS/COFINS, PIS, COFINS e NAT. RECEITA, mas nunca sobre uma regra
+  // aprendida da empresa. Só avaliado para produtos que já serão tributados.
+  const resultadoFederal = padraoBase ? resolverRegimeFederal(ncmDigitos, nomeNormalizado) : { tipo: "nenhuma" as const };
+  if (resultadoFederal.tipo === "ambiguo") {
+    return construirResultadoDuvida(input, resultadoFederal.motivo);
+  }
+  const regraFederal = resultadoFederal.tipo === "regra" ? resultadoFederal.regra : undefined;
+  if (regraFederal) {
+    pendencias.push({
+      peso: 0,
+      mensagem: `PIS/COFINS: ${regraFederal.regime} — ${regraFederal.baseLegal}`,
+    });
+  }
+
   const diretivaReducao = contexto.diretivas.find(
     (d): d is Extract<Diretiva, { tipo: "reducao_segmento" }> =>
       d.tipo === "reducao_segmento" && produtoPertenceAoSegmento(nomeNormalizado, d.chave)
@@ -491,18 +508,18 @@ export function classificarProdutoCliente(
     "CST PIS/COFINS",
     input.cstPisCofins,
     2,
-    regraAprendida("cstPisCofins") ?? override?.cstPisCofins ?? padraoBase?.cstPisCofins
+    regraAprendida("cstPisCofins") ?? regraFederal?.cstPisCofins ?? padraoBase?.cstPisCofins
   );
-  const pis = campoNumero("PIS", input.pis, regraAprendidaNumero("pis") ?? override?.pis ?? padraoBase?.pis);
+  const pis = campoNumero("PIS", input.pis, regraAprendidaNumero("pis") ?? regraFederal?.pis ?? padraoBase?.pis);
   const cofins = campoNumero(
     "COFINS",
     input.cofins,
-    regraAprendidaNumero("cofins") ?? override?.cofins ?? padraoBase?.cofins
+    regraAprendidaNumero("cofins") ?? regraFederal?.cofins ?? padraoBase?.cofins
   );
   const natReceita = campoTexto(
     "NAT. RECEITA",
     input.natReceita,
-    regraAprendida("natReceita") ?? override?.natReceita ?? padraoBase?.natReceita
+    regraAprendida("natReceita") ?? regraFederal?.natReceita ?? padraoBase?.natReceita
   );
   const cstIbsCbs = campoCodigo(
     "CST IBS/CBS",
