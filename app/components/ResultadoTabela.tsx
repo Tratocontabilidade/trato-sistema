@@ -9,6 +9,7 @@ const STATUS_FILTROS: { valor: StatusLinha | "todos"; rotulo: string }[] = [
   { valor: "todos", rotulo: "Todos" },
   { valor: "OK", rotulo: "OK" },
   { valor: "Preenchido automaticamente", rotulo: "Preenchido automaticamente" },
+  { valor: "Preenchido com inferência de NCM — revisar", rotulo: "Inferência de NCM — revisar" },
   { valor: "Divergência detectada", rotulo: "Divergência detectada" },
   { valor: "Revisar manualmente", rotulo: "Revisar manualmente" },
   { valor: "Dúvida — aguardando instrução", rotulo: "Dúvida — aguardando instrução" },
@@ -20,6 +21,8 @@ function classeBadgeStatus(status: StatusLinha): string {
       return "badge--ok";
     case "Preenchido automaticamente":
       return "badge--info";
+    case "Preenchido com inferência de NCM — revisar":
+      return "badge--inferido";
     case "Divergência detectada":
       return "badge--danger";
     case "Revisar manualmente":

@@ -17,6 +17,8 @@
   --danger-soft: rgba(193, 80, 46, 0.15);
   --duvida: #9083db;
   --duvida-soft: rgba(144, 131, 219, 0.16);
+  --inferido: #5b9bd5;
+  --inferido-soft: rgba(91, 155, 213, 0.16);
   --radius: 10px;
   --radius-sm: 6px;
   --font-serif: "Fraunces", Georgia, serif;
@@ -43,6 +45,8 @@
   --danger-soft: rgba(193, 80, 46, 0.12);
   --duvida: #6c62a4;
   --duvida-soft: rgba(144, 131, 219, 0.14);
+  --inferido: #265f8f;
+  --inferido-soft: rgba(38, 95, 143, 0.14);
 }
 
 @media (prefers-color-scheme: light) {
@@ -61,6 +65,8 @@
     --danger-soft: rgba(193, 80, 46, 0.12);
     --duvida: #6c62a4;
     --duvida-soft: rgba(144, 131, 219, 0.14);
+    --inferido: #265f8f;
+    --inferido-soft: rgba(38, 95, 143, 0.14);
   }
 }
 
@@ -677,6 +683,10 @@ textarea {
   border-color: rgba(144, 131, 219, 0.45);
 }
 
+.resumo-item--inferido {
+  border-color: rgba(91, 155, 213, 0.45);
+}
+
 .resumo-valor {
   font-family: var(--font-serif);
   font-size: 1.7rem;
@@ -697,6 +707,10 @@ textarea {
 
 .resumo-item--duvida .resumo-valor {
   color: var(--duvida);
+}
+
+.resumo-item--inferido .resumo-valor {
+  color: var(--inferido);
 }
 
 .resumo-rotulo {
@@ -844,6 +858,11 @@ tbody tr:hover {
 .badge--duvida {
   background: var(--duvida-soft);
   color: var(--duvida);
+}
+
+.badge--inferido {
+  background: var(--inferido-soft);
+  color: var(--inferido);
 }
 
 .badge--info {

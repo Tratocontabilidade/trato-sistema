@@ -15,9 +15,14 @@ export interface DivergenciaAprendizado {
   valorNovo: string;
 }
 
+// cfopSaidas e cstIcms (as duas colunas que decidem ST) ficam de fora de
+// propósito — o motor (lib/rules.ts) nunca aceita regra aprendida para esses
+// dois campos, então oferecer aqui a opção de "aprender" uma correção neles
+// criaria uma regra que o motor descartaria sempre, além de abrir espaço
+// para um clique errado ("Aprovar todas do mesmo NCM") travar um NCM em
+// ST/não-ST por fora do anexo vigente. ST é sempre responsabilidade do
+// anexo ativo da empresa (lib/anexos.ts) — para corrigir, atualize o anexo.
 const CAMPOS_COMPARAVEIS: { campo: keyof ClientProdutoResultado; rotulo: string }[] = [
-  { campo: "cfopSaidas", rotulo: "CFOP SAIDAS" },
-  { campo: "cstIcms", rotulo: "CST ICMS" },
   { campo: "cstPisCofins", rotulo: "CST PIS/COFINS" },
   { campo: "pis", rotulo: "PIS" },
   { campo: "cofins", rotulo: "COFINS" },
@@ -31,8 +36,6 @@ const CAMPOS_COMPARAVEIS: { campo: keyof ClientProdutoResultado; rotulo: string 
 // Usado só para NORMALIZAR a comparação (ex.: "40" e "040" são o mesmo
 // valor); o resultado exibido ao usuário já sai no formato normalizado.
 const DIGITOS_ESPERADOS: Partial<Record<string, number>> = {
-  cfopSaidas: 4,
-  cstIcms: 3,
   cstPisCofins: 2,
   cstIbsCbs: 3,
   cclasstrib: 6,

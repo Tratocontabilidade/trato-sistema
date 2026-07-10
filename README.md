@@ -110,6 +110,15 @@ nada.
 por isso não têm campos em comum — um item pode ter redução de IBS/CBS sem
 ter regime federal especial de PIS/COFINS, e vice-versa.
 
+**Exceção estrutural:** CFOP SAIDAS e CST ICMS (os dois campos que decidem
+ST) **nunca** aceitam regra aprendida, mesmo que exista uma salva para o
+NCM — a única autoridade para ST é o anexo ativo (ou, na ausência de anexo,
+a coluna Tributação da planilha, validada normalmente). Isso evita que uma
+correção aprovada por engano no fluxo de aprendizado (ex.: "Aprovar todas
+do mesmo NCM" clicado errado) trave um NCM em ST — ou fora de ST — para
+sempre, por fora do anexo vigente. Por isso a tela "Aprender com correção"
+também não oferece mais esses dois campos para aprendizado.
+
 ## Planilha de entrada
 
 O sistema aceita **.xls ou .xlsx** no layout fixo "Cadastro de Produtos":
@@ -121,7 +130,7 @@ as 19 colunas abaixo (nesta ordem):
 | --- | --- |
 | Código, Nome, Código de barras, UN, Preço unit. | repassadas sem alteração |
 | Tributação | `Tributado`, `Substituição tributária`, `Não tributado` ou `Isento` |
-| NCM | aceita com ou sem pontos, ou incompleto — normalizado para só dígitos. **Vazio → `Dúvida — aguardando instrução`**, nada é preenchido (regra de ouro: sem NCM não dá para decidir ST/overrides). Com dígitos mas diferente de 8 (sujo/truncado) → ainda é classificado por casamento de prefixo contra anexos/`NCM_OVERRIDES`, com a linha sinalizada para conferência do NCM completo. |
+| NCM | aceita com ou sem pontos, ou incompleto — normalizado para só dígitos. **Vazio** → tenta inferir pelo Nome primeiro (ver "Inferência de NCM por Nome" abaixo); se não conseguir, `Dúvida — aguardando instrução`, nada é preenchido (regra de ouro: sem NCM não dá para decidir ST/overrides). Com dígitos mas diferente de 8 (sujo/truncado) → ainda é classificado por casamento de prefixo contra anexos/`NCM_OVERRIDES`, com a linha sinalizada para conferência do NCM completo. |
 | CFOP SAIDAS, CST ICMS, CST PIS/COFINS, CST IBS/CBS, Cclasstrib | se vazios, preenchidos automaticamente; se já preenchidos, apenas validados |
 | PIS, COFINS, NAT. RECIETA, RED. B.C., IBS, CBS | idem — preenchidos ou validados conforme o padrão |
 | ALIQ. FCP | repassada sem alteração, exceto para cosméticos/perfumaria sujeitos ao FCP 2% da Bahia (ver seção seguinte) |
@@ -174,7 +183,7 @@ Monofásico — Lei nº 10.147/2000...").
 | Regime | CST | Categorias | Base legal |
 | --- | --- | --- | --- |
 | Monofásico (alíquota zero na revenda) | 04 | Cosméticos/perfumaria/higiene (cap. 33, escovas dentais 9603.21), bebidas frias (águas, refrigerantes, isotônicos, energéticos, cerveja — 2201-2203), autopeças (pneus, câmaras de ar, peças de veículo — 4011/4013/8708/9026/9029/9031/9032), combustíveis (2710/2711), lenços de papel e fraldas/absorventes (4818.20/4818.40) | Lei nº 10.147/2000; Lei nº 10.833/2003 art. 58; Lei nº 10.485/2002; Lei nº 9.718/1998 |
-| Alíquota zero | 06 | Cesta básica federal (feijão, arroz, farinhas, pão comum, leite, ovos, carnes frescas de boi/porco/aves, peixes frescos, óleo de soja, manteiga), sabão em barra (3401.19), papel higiênico folha simples (4818.10) | Lei nº 10.925/2004, art. 1º |
+| Alíquota zero | 06 | Cesta básica federal (feijão, arroz, farinha de trigo/mandioca, pão comum, leite/queijos, ovos, carnes frescas de boi/porco/aves, peixes frescos, óleo de soja/milho, manteiga, açúcar 1701.14/1701.99, café torrado 0901.21, sal), sabão em barra (3401.19), papel higiênico folha simples (4818.10) | Lei nº 10.925/2004, art. 1º |
 | Substituição tributária federal | 05 | Cigarros (2402) | Lei nº 9.532/1997, art. 53 |
 | Tributado normal (fallback) | 01 | Todo o resto — PIS 1,65% / COFINS 7,6% (ou 0,65%/3% no regime cumulativo) | — |
 
@@ -198,17 +207,40 @@ Casos que exigem cuidado extra, sempre documentados em comentário no código:
   legais diferentes (Lei nº 10.925/2004 x LC nº 214/2025), então um NCM pode
   ter redução de IBS/CBS sem ter alíquota zero de PIS/COFINS, ou vice-versa.
 
+### Inferência de NCM por Nome (`lib/tables.ts`, `INFERENCIA_NCM_POR_NOME`)
+
+Quando o NCM vem vazio mas o Nome do produto é claro ("CHOCOLATE NESTLÉ
+200G" é obviamente NCM 1806), o motor tenta inferir o NCM por palavra-chave
+antes de desistir para Dúvida. Tabela aberta com ~25 categorias (chocolate,
+wafer, biscoito, cerveja, refrigerante, água mineral, leite, arroz, feijão,
+farinha de trigo, açúcar, óleo de soja, café, sabão em barra, sabonete,
+xampu, condicionador, creme dental, escova dental, papel higiênico, fralda,
+absorvente, detergente, amaciante, desinfetante, água sanitária).
+
+**Nunca confunde NCM real com NCM inferido**: toda linha que usa essa
+inferência sai com o Status dedicado **"Preenchido com inferência de NCM —
+revisar"** (cor própria na interface, nunca `OK` nem `Preenchido
+automaticamente` comum) e a Observação sempre começa com "NCM inferido do
+nome (...) — validar antes de emitir NF-e". Quando o Nome não bate com
+nenhuma entrada, o comportamento continua o de sempre: `Dúvida — aguardando
+instrução`, sem preencher nada.
+
 A saída mantém o mesmo layout (título mesclado, aba e cabeçalho originais
 intactos), com duas colunas adicionais: **Status** (`OK`, `Preenchido
-automaticamente`, `Divergência detectada`, `Revisar manualmente` ou `Dúvida
-— aguardando instrução`) e **Observação** (motivo, quando o status não for
-`OK`).
+automaticamente`, `Preenchido com inferência de NCM — revisar`,
+`Divergência detectada`, `Revisar manualmente` ou `Dúvida — aguardando
+instrução`) e **Observação** (motivo, quando o status não for `OK`).
 
 ## Empresas, instruções e anexos de ST
 
 Na tela **Empresas** (`/empresas`) você cadastra cada cliente: nome, CNPJ,
-ramo, UF, regime tributário (Lucro Real = PIS/COFINS não-cumulativo por
-padrão; Presumido/Simples = cumulativo) e instruções personalizadas. Editando
+ramo, UF, regime tributário (Lucro Real = PIS/COFINS não-cumulativo, 1,65%/
+7,6%; Presumido/Simples = cumulativo, 0,65%/3%) e instruções personalizadas.
+O regime tributário **não tem valor pré-selecionado** — o campo começa
+vazio e obriga uma escolha explícita antes de salvar, de propósito: um
+padrão silencioso arriscaria salvar o regime errado (e inverter as
+alíquotas de PIS/COFINS de todo o processamento) se ninguém reparasse no
+campo ao cadastrar uma empresa nova. Editando
 uma empresa já criada, você também pode subir **anexos de Substituição
 Tributária** (Excel ou CSV — tolerante a variações de cabeçalho como "NCM"/
 "N.C.M."/"Código NCM"; se não detectar automaticamente, a tela pede para
@@ -267,6 +299,12 @@ pelo Código do produto). Para cada divergência: **Aprovar**, **Descartar**
 ou **Aprovar todas do mesmo NCM**. Só depois de aprovadas as regras são
 salvas na empresa (`RegraAprendida`) e passam a ter a maior prioridade nos
 próximos processamentos — nada é aplicado sem essa aprovação explícita.
+
+**CFOP SAIDAS e CST ICMS ficam fora dessa tela de propósito** — são os
+campos que decidem ST, e ST é sempre responsabilidade do anexo ativo da
+empresa (nunca de uma regra memorizada por NCM). Se um produto está saindo
+como ST indevidamente (ou o contrário), corrija atualizando o anexo, não
+aprovando uma correção manual desses dois campos.
 
 ## Rodando localmente
 
@@ -327,6 +365,12 @@ automaticamente um novo deploy.
   deliberadamente separada de `NCM_OVERRIDES` — são obrigações diferentes,
   com listas de NCM e bases legais próprias, e um item pode se encaixar
   numa sem se encaixar na outra.
+- `lib/tables.ts` também contém `INFERENCIA_NCM_POR_NOME` (tabela aberta de
+  palavras-chave → NCM inferido, usada só quando o NCM vem vazio). Novas
+  entradas devem citar o NCM na maior precisão disponível (8 dígitos quando
+  possível) e nunca eliminar o status dedicado de inferência — a inferência
+  existe para reduzir Dúvidas evitáveis, não para fingir que o NCM veio do
+  cliente.
 - A decisão de **Substituição Tributária (ICMS) nunca deve ir para
   `NCM_OVERRIDES`** — isso é intencional (o tipo `OverrideClassificacao` não
   tem campos de CFOP/CST ICMS, nem de PIS/COFINS). ST de ICMS é sempre
@@ -400,12 +444,26 @@ automaticamente um novo deploy.
   todo o universo de regimes especiais de PIS/COFINS do Direito Tributário
   federal — só o que é relevante para o sortimento de supermercado na
   Bahia.
-- A lista de cesta básica federal (Lei nº 10.925/2004) implementada é
-  deliberadamente mais estreita que a lista de cesta básica do IBS/CBS em
-  `NCM_OVERRIDES` (ex.: açúcar, sal e café não estão na lista federal de
-  PIS/COFINS) — reflete diferenças reais entre as duas leis, não é uma
-  omissão a corrigir sem confirmar a base legal antes.
+- A lista de cesta básica federal (Lei nº 10.925/2004) implementada não é
+  idêntica à lista de cesta básica do IBS/CBS em `NCM_OVERRIDES` (ex.:
+  massas alimentícias — NCM 1902 — e hortaliças/frutas frescas dos
+  capítulos 07/08 têm redução de IBS/CBS mas não constam na lista federal
+  de PIS/COFINS implementada) — reflete diferenças reais entre as duas
+  leis, não é uma omissão a corrigir sem confirmar a base legal antes.
 - NCM 0210 (carnes salgadas/em salmoura/secas/defumadas) sempre vira Dúvida
   por decisão deliberada: só alguns subitens da Lei nº 10.925/2004 têm
   alíquota zero, e o sistema não presume qual sem o NCM completo de 8
   dígitos.
+- A inferência de NCM por Nome (`INFERENCIA_NCM_POR_NOME`) é heurística por
+  palavra-chave, com a mesma limitação do casamento de segmento/FCP: nomes
+  fora do vocabulário reconhecido não inferem nada (a linha segue para
+  Dúvida, comportamento seguro) e a primeira palavra-chave que bater vence
+  quando o nome contém mais de uma (ex.: "wafer chocolate" infere o NCM de
+  chocolate, não o de wafer, porque "chocolate" vem antes na tabela). Como
+  toda linha inferida sai com status e Observação dedicados exigindo
+  revisão, um match "errado" nunca é silencioso.
+- O cadastro de empresa exige a escolha explícita do regime tributário (sem
+  valor padrão) — uma empresa criada antes dessa mudança e sem edição
+  posterior mantém o que já estava salvo; confira o campo "Regime
+  tributário" de clientes cadastrados em versões anteriores do sistema se
+  houver dúvida sobre as alíquotas de PIS/COFINS aplicadas.

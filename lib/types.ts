@@ -13,7 +13,8 @@ export type StatusLinha =
   | "Preenchido automaticamente"
   | "Divergência detectada"
   | "Revisar manualmente"
-  | "Dúvida — aguardando instrução";
+  | "Dúvida — aguardando instrução"
+  | "Preenchido com inferência de NCM — revisar";
 
 /**
  * Linha lida da planilha do cliente, já normalizada.

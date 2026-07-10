@@ -82,8 +82,8 @@ export default function HistoricoPage() {
                   <div className="empresa-card-meta">{new Date(h.dataHora).toLocaleString("pt-BR")}</div>
                   <div className="empresa-card-meta">
                     {h.contadores.total} produtos · {h.contadores.ok} OK · {h.contadores.preenchidos} preenchidos
-                    automaticamente · {h.contadores.revisar} revisar manualmente · {h.contadores.divergentes}{" "}
-                    divergência · {h.contadores.duvidas} dúvida
+                    automaticamente · {h.contadores.inferidos} com NCM inferido · {h.contadores.revisar} revisar
+                    manualmente · {h.contadores.divergentes} divergência · {h.contadores.duvidas} dúvida
                   </div>
                   {h.anexosAtivos.length > 0 && (
                     <div className="empresa-card-meta">Anexos ativos: {h.anexosAtivos.join(", ")}</div>

@@ -31,8 +31,13 @@ export function EmpresaForm({ empresa, onSalvar, onCancelar }: EmpresaFormProps)
   const [cnpj, setCnpj] = useState(empresa?.cnpj ?? "");
   const [ramo, setRamo] = useState(empresa?.ramo ?? "Supermercado");
   const [uf, setUf] = useState(empresa?.uf ?? "BA");
-  const [regimeTributario, setRegimeTributario] = useState<RegimeTributario>(
-    empresa?.regimeTributario ?? "Lucro Presumido"
+  // Sem valor padrão de propósito: o regime tributário decide as alíquotas de
+  // PIS/COFINS (Lucro Real = não-cumulativo 1,65%/7,6%; Presumido/Simples =
+  // cumulativo 0,65%/3%) — um valor pré-selecionado silenciosamente arriscava
+  // salvar o regime errado se o usuário não reparasse no campo ao cadastrar
+  // uma empresa nova. Fica vazio até o usuário escolher explicitamente.
+  const [regimeTributario, setRegimeTributario] = useState<RegimeTributario | "">(
+    empresa?.regimeTributario ?? ""
   );
   const [instrucoesPersonalizadas, setInstrucoesPersonalizadas] = useState(
     empresa?.instrucoesPersonalizadas ?? ""
@@ -45,7 +50,7 @@ export function EmpresaForm({ empresa, onSalvar, onCancelar }: EmpresaFormProps)
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!nome.trim()) return;
+    if (!nome.trim() || !regimeTributario) return;
 
     if (empresa) {
       const atualizada: Empresa = {
@@ -161,14 +166,23 @@ export function EmpresaForm({ empresa, onSalvar, onCancelar }: EmpresaFormProps)
             <select
               id="empresa-regime"
               value={regimeTributario}
+              required
               onChange={(e) => setRegimeTributario(e.target.value as RegimeTributario)}
             >
+              <option value="" disabled>
+                Selecione…
+              </option>
               {REGIMES_TRIBUTARIOS.map((r) => (
                 <option key={r} value={r}>
                   {r}
                 </option>
               ))}
             </select>
+            <p className="campo-ajuda">
+              Define as alíquotas de PIS/COFINS: Lucro Real = não-cumulativo (1,65%/7,6%); Lucro
+              Presumido/Simples Nacional = cumulativo (0,65%/3%). Confira com atenção — errar aqui
+              inverte as alíquotas de todo o processamento.
+            </p>
           </div>
         </div>
 
