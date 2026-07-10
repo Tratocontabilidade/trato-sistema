@@ -238,24 +238,26 @@ const REGRAS_FEDERAIS_PIS_COFINS: EntradaFederal[] = [
   // ---------------------------------------------------------------------
   {
     tipo: "fixa",
-    prefixos: ["0713", "1006", "1101", "1102", "190120", "190590"],
+    prefixos: ["0713", "1006", "1101", "1102", "110620", "190120", "190590"],
     regra: {
       cstPisCofins: "06",
       pis: 0,
       cofins: 0,
       regime: REGIME_ALIQUOTA_ZERO,
-      baseLegal: "Lei nº 10.925/2004, art. 1º — feijão/leguminosas, arroz, farinhas e pão comum.",
+      baseLegal:
+        "Lei nº 10.925/2004, art. 1º — feijão/leguminosas, arroz, farinha de trigo, farinha de mandioca " +
+        "(NCM 1106.20) e pão comum.",
     },
   },
   {
     tipo: "fixa",
-    prefixos: ["0401", "0402"],
+    prefixos: ["0401", "0402", "0406"],
     regra: {
       cstPisCofins: "06",
       pis: 0,
       cofins: 0,
       regime: REGIME_ALIQUOTA_ZERO,
-      baseLegal: "Lei nº 10.925/2004, art. 1º — leite fluido e leite em pó.",
+      baseLegal: "Lei nº 10.925/2004, art. 1º — leite fluido, leite em pó e queijos (NCM 0406).",
     },
   },
   {
@@ -304,13 +306,13 @@ const REGRAS_FEDERAIS_PIS_COFINS: EntradaFederal[] = [
   },
   {
     tipo: "fixa",
-    prefixos: ["1507"],
+    prefixos: ["1507", "1515"],
     regra: {
       cstPisCofins: "06",
       pis: 0,
       cofins: 0,
       regime: REGIME_ALIQUOTA_ZERO,
-      baseLegal: "Lei nº 10.925/2004, art. 1º — óleo de soja.",
+      baseLegal: "Lei nº 10.925/2004, art. 1º — óleo de soja e óleo de milho (NCM 1515.29).",
     },
   },
   {
@@ -322,6 +324,39 @@ const REGRAS_FEDERAIS_PIS_COFINS: EntradaFederal[] = [
       cofins: 0,
       regime: REGIME_ALIQUOTA_ZERO,
       baseLegal: "Lei nº 10.925/2004, art. 1º — manteiga.",
+    },
+  },
+  {
+    tipo: "fixa",
+    prefixos: ["170114", "170199"],
+    regra: {
+      cstPisCofins: "06",
+      pis: 0,
+      cofins: 0,
+      regime: REGIME_ALIQUOTA_ZERO,
+      baseLegal: "Lei nº 10.925/2004, art. 1º — açúcar (NCM 1701.14 bruto de cana e 1701.99 refinado).",
+    },
+  },
+  {
+    tipo: "fixa",
+    prefixos: ["090121"],
+    regra: {
+      cstPisCofins: "06",
+      pis: 0,
+      cofins: 0,
+      regime: REGIME_ALIQUOTA_ZERO,
+      baseLegal: "Lei nº 10.925/2004, art. 1º — café torrado (NCM 0901.21).",
+    },
+  },
+  {
+    tipo: "fixa",
+    prefixos: ["2501"],
+    regra: {
+      cstPisCofins: "06",
+      pis: 0,
+      cofins: 0,
+      regime: REGIME_ALIQUOTA_ZERO,
+      baseLegal: "Lei nº 10.925/2004, art. 1º — sal.",
     },
   },
 

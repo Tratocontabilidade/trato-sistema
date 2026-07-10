@@ -69,17 +69,19 @@ export default function Page() {
     const total = estado.resultados.length;
     let ok = 0;
     let preenchidos = 0;
+    let inferidos = 0;
     let revisar = 0;
     let divergentes = 0;
     let duvidas = 0;
     for (const r of estado.resultados) {
       if (r.status === "OK") ok++;
       else if (r.status === "Preenchido automaticamente") preenchidos++;
+      else if (r.status === "Preenchido com inferência de NCM — revisar") inferidos++;
       else if (r.status === "Revisar manualmente") revisar++;
       else if (r.status === "Divergência detectada") divergentes++;
       else if (r.status === "Dúvida — aguardando instrução") duvidas++;
     }
-    return { total, ok, preenchidos, revisar, divergentes, duvidas };
+    return { total, ok, preenchidos, inferidos, revisar, divergentes, duvidas };
   }, [estado]);
 
   async function processarArquivo(arquivo: File) {
@@ -127,12 +129,14 @@ export default function Page() {
 
       let ok = 0;
       let preenchidos = 0;
+      let inferidos = 0;
       let revisar = 0;
       let divergentes = 0;
       let duvidas = 0;
       for (const r of resultados) {
         if (r.status === "OK") ok++;
         else if (r.status === "Preenchido automaticamente") preenchidos++;
+        else if (r.status === "Preenchido com inferência de NCM — revisar") inferidos++;
         else if (r.status === "Revisar manualmente") revisar++;
         else if (r.status === "Divergência detectada") divergentes++;
         else if (r.status === "Dúvida — aguardando instrução") duvidas++;
@@ -142,7 +146,7 @@ export default function Page() {
         nomeArquivo: arquivo.name,
         instrucoesAplicadas: diretivas.map(descreverDiretiva),
         anexosAtivos: anexosUsados.map((a) => a.nome),
-        contadores: { total: resultados.length, ok, preenchidos, revisar, divergentes, duvidas },
+        contadores: { total: resultados.length, ok, preenchidos, inferidos, revisar, divergentes, duvidas },
         resultados,
         contexto,
       });

@@ -24,6 +24,7 @@ import {
   PADRAO_ST_CUMULATIVO,
   avaliarFcpCosmeticos,
   buscarOverridePorNcm,
+  inferirNcmPorNome,
   type AvaliacaoFcpCosmeticos,
 } from "./tables";
 import { resolverRegimeFederal } from "./regras-federais";
@@ -297,13 +298,25 @@ export function classificarProdutoCliente(
     );
   }
 
-  const ncmDigitos = input.ncm;
+  let ncmDigitos = input.ncm;
+  let ncmOriginalEfetivo = input.ncmOriginal;
+  let ncmInferidoDescricao: string | undefined;
 
   // Regra de ouro: sem NCM não dá para saber se um produto é ST, se cai numa
   // sobrescrita/redução, ou se consta em algum anexo — nenhum desses campos
-  // pode ser "chutado" a partir só da coluna Tributação. Sempre Dúvida.
+  // pode ser "chutado" a partir só da coluna Tributação. Antes de desistir,
+  // tenta inferir o NCM por palavra-chave no Nome (lib/tables.ts); se achar,
+  // segue a classificação normal mas SEMPRE marcada como inferência — nunca
+  // sai como "OK" nem como "Preenchido automaticamente" comum, para o NCM
+  // inferido nunca ser confundido com um NCM real. Se não achar nada, Dúvida.
   if (!ncmDigitos) {
-    return construirResultadoDuvida(input, "NCM não informado — não é possível determinar CFOP/CST/ST sem o NCM.");
+    const inferencia = inferirNcmPorNome(nomeNormalizado);
+    if (!inferencia) {
+      return construirResultadoDuvida(input, "NCM não informado — não é possível determinar CFOP/CST/ST sem o NCM.");
+    }
+    ncmDigitos = inferencia.ncm;
+    ncmOriginalEfetivo = inferencia.ncm;
+    ncmInferidoDescricao = inferencia.descricao;
   }
 
   const ncmValido = ncmDigitos.length === 8;
@@ -445,8 +458,19 @@ export function classificarProdutoCliente(
 
   // Regras aprendidas da empresa (Bloco 5): maior prioridade de todas, por NCM+campo exato.
   // Só entram em produção depois de aprovação humana explícita (ver RevisaoAprendizado.tsx).
+  //
+  // REGRA ABSOLUTA: cfopSaidas e cstIcms (os campos que decidem ST) NUNCA são
+  // aceitos como regra aprendida, mesmo que existam no cadastro da empresa —
+  // a única autoridade para ST é o anexo ativo (ou, na ausência de anexo, a
+  // coluna Tributação da planilha, com a validação cruzada normal). Sem essa
+  // trava, uma correção aprovada por engano no fluxo de aprendizado (ex.:
+  // "Aprovar todas do mesmo NCM" clicado no NCM errado) travaria esse NCM em
+  // ST (ou não-ST) para sempre, por fora do anexo vigente — exatamente o tipo
+  // de erro silencioso que a regra de ouro existe para evitar.
+  const CAMPOS_QUE_NUNCA_VEM_DE_REGRA_APRENDIDA = new Set(["cfopSaidas", "cstIcms"]);
   const regrasNcm = ncmValido ? (contexto.regrasAprendidas ?? []).filter((r) => r.ncm === ncmDigitos) : [];
   function regraAprendida(campo: string): string | undefined {
+    if (CAMPOS_QUE_NUNCA_VEM_DE_REGRA_APRENDIDA.has(campo)) return undefined;
     const regra = regrasNcm.find((r) => r.campo === campo);
     if (regra) {
       pendencias.push({
@@ -502,8 +526,10 @@ export function classificarProdutoCliente(
     return r.valor;
   }
 
-  const cfopSaidas = campoCodigo("CFOP SAIDAS", input.cfopSaidas, 4, regraAprendida("cfopSaidas") ?? padraoBase?.cfopSaidas);
-  const cstIcms = campoCodigo("CST ICMS", input.cstIcms, 3, regraAprendida("cstIcms") ?? padraoBase?.cstIcms);
+  // cfopSaidas/cstIcms nunca consultam regraAprendida (ver comentário acima) — vêm só do
+  // padrão derivado da categoria já corrigida pelo anexo (ou pela Tributação, na ausência dele).
+  const cfopSaidas = campoCodigo("CFOP SAIDAS", input.cfopSaidas, 4, padraoBase?.cfopSaidas);
+  const cstIcms = campoCodigo("CST ICMS", input.cstIcms, 3, padraoBase?.cstIcms);
   const cstPisCofins = campoCodigo(
     "CST PIS/COFINS",
     input.cstPisCofins,
@@ -544,11 +570,22 @@ export function classificarProdutoCliente(
   const aliqFcp = campoFcp(input.aliqFcp);
 
   const pesoFinal = Math.max(0, ...pendencias.map((p) => p.peso), algumAutofill ? 1 : 0);
-  const status = pesoParaStatus(pesoFinal);
-  const observacao = status === "OK" ? "" : pendencias.map((p) => p.mensagem).join(" ");
+  // NCM inferido nunca sai como "OK" nem como "Preenchido automaticamente" comum — o status
+  // dedicado deixa claro, em qualquer tela ou planilha baixada, que o NCM não veio do cliente.
+  const status: StatusLinha = ncmInferidoDescricao
+    ? "Preenchido com inferência de NCM — revisar"
+    : pesoParaStatus(pesoFinal);
+  const mensagensPendencias = pendencias.map((p) => p.mensagem).join(" ");
+  const observacao = ncmInferidoDescricao
+    ? `NCM inferido do nome (${ncmInferidoDescricao}) — validar antes de emitir NF-e. ${mensagensPendencias}`.trim()
+    : status === "OK"
+      ? ""
+      : mensagensPendencias;
 
   return {
     ...input,
+    ncm: ncmDigitos,
+    ncmOriginal: ncmOriginalEfetivo,
     cfopSaidas,
     cstIcms,
     cstPisCofins,

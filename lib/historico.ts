@@ -12,6 +12,7 @@ export interface ContadoresHistorico {
   total: number;
   ok: number;
   preenchidos: number;
+  inferidos: number;
   revisar: number;
   divergentes: number;
   duvidas: number;

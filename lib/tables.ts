@@ -325,3 +325,87 @@ export function avaliarFcpCosmeticos(ncmDigitos: string, nomeOriginal: string): 
 
   return { aplicaFcp: true, descricao: achado.descricao };
 }
+
+// ---------------------------------------------------------------------
+// Inferência de NCM a partir do Nome do produto — só usada quando a
+// planilha do cliente vem com o NCM totalmente vazio. NUNCA confunde NCM
+// real com NCM inferido: toda linha que usa esta tabela sai com Status
+// "Preenchido com inferência de NCM — revisar" (nunca "OK" ou "Preenchido
+// automaticamente" comum), e a Observação sempre avisa que o NCM foi
+// inferido e precisa de validação antes da emissão de NF-e. Tabela aberta,
+// pensada para reduzir Dúvidas evitáveis em casos óbvios — quando o Nome
+// não bate com nenhuma entrada, a linha continua indo para Dúvida
+// normalmente (regra de ouro preservada).
+// ---------------------------------------------------------------------
+
+export interface InferenciaNcmEntry {
+  /** Qualquer uma destas palavras-chave no Nome (já normalizado) aciona a entrada. */
+  palavrasChave: string[];
+  /** NCM inferido, só dígitos (pode ter menos de 8 quando a fonte só specifica até a subposição). */
+  ncmInferido: string;
+  descricao: string;
+  /** Checagem extra além das palavras-chave (usado quando uma palavra sozinha é ambígua, ex.: "leite"). */
+  checagemExtra?: (nomeNormalizado: string) => boolean;
+}
+
+function pareceEmbalagemLeiteLiquido(nome: string): boolean {
+  if (nome.includes("uht") || nome.includes("longa vida")) return true;
+  // Indicador de volume em litros (ex.: "1l", "1 l", "2l") — o "m" de "ml" já
+  // quebra esse casamento sozinho, então não precisa de exclusão separada.
+  return /\d+([.,]\d+)?\s*l\b/.test(nome);
+}
+
+export const INFERENCIA_NCM_POR_NOME: InferenciaNcmEntry[] = [
+  { palavrasChave: ["chocolate", "bombom", "cacau", "achocolatado"], ncmInferido: "18069000", descricao: "chocolate/achocolatado" },
+  { palavrasChave: ["wafer"], ncmInferido: "190532", descricao: "wafer" },
+  { palavrasChave: ["biscoito", "bolacha"], ncmInferido: "190531", descricao: "biscoito/bolacha" },
+  { palavrasChave: ["cerveja"], ncmInferido: "22030000", descricao: "cerveja" },
+  {
+    palavrasChave: ["refrigerante", "coca cola", "guarana", "fanta", "sprite"],
+    ncmInferido: "22021000",
+    descricao: "refrigerante",
+  },
+  { palavrasChave: ["agua mineral"], ncmInferido: "22011000", descricao: "água mineral" },
+  {
+    palavrasChave: ["leite"],
+    ncmInferido: "040120",
+    descricao: "leite fluido (UHT/longa vida)",
+    checagemExtra: pareceEmbalagemLeiteLiquido,
+  },
+  { palavrasChave: ["arroz"], ncmInferido: "100630", descricao: "arroz" },
+  { palavrasChave: ["feijao"], ncmInferido: "071333", descricao: "feijão" },
+  { palavrasChave: ["farinha de trigo"], ncmInferido: "110100", descricao: "farinha de trigo" },
+  { palavrasChave: ["acucar"], ncmInferido: "1701", descricao: "açúcar" },
+  { palavrasChave: ["oleo de soja"], ncmInferido: "150790", descricao: "óleo de soja" },
+  { palavrasChave: ["cafe"], ncmInferido: "090121", descricao: "café" },
+  { palavrasChave: ["sabao em barra"], ncmInferido: "340119", descricao: "sabão em barra" },
+  { palavrasChave: ["sabonete"], ncmInferido: "340111", descricao: "sabonete" },
+  { palavrasChave: ["shampoo", "xampu"], ncmInferido: "330510", descricao: "xampu" },
+  { palavrasChave: ["condicionador"], ncmInferido: "330590", descricao: "condicionador" },
+  { palavrasChave: ["creme dental", "pasta dental"], ncmInferido: "330610", descricao: "creme dental" },
+  { palavrasChave: ["escova de dente", "escova dental"], ncmInferido: "960321", descricao: "escova dental" },
+  { palavrasChave: ["papel higienico"], ncmInferido: "481810", descricao: "papel higiênico" },
+  { palavrasChave: ["fralda descartavel", "fraldas"], ncmInferido: "481840", descricao: "fralda descartável" },
+  { palavrasChave: ["absorvente"], ncmInferido: "961900", descricao: "absorvente" },
+  { palavrasChave: ["detergente"], ncmInferido: "340290", descricao: "detergente" },
+  { palavrasChave: ["amaciante"], ncmInferido: "380991", descricao: "amaciante de roupas" },
+  { palavrasChave: ["desinfetante"], ncmInferido: "380894", descricao: "desinfetante" },
+  { palavrasChave: ["agua sanitaria"], ncmInferido: "282890", descricao: "água sanitária" },
+];
+
+/**
+ * Tenta inferir o NCM de um produto pelo Nome (já normalizado — sem
+ * acento, minúsculo). Retorna `null` quando nada bate, caso em que o
+ * chamador deve seguir com a regra de ouro normal (Dúvida por falta de
+ * NCM), nunca chutando um valor.
+ */
+export function inferirNcmPorNome(nomeNormalizado: string): { ncm: string; descricao: string } | null {
+  if (!nomeNormalizado) return null;
+  for (const entrada of INFERENCIA_NCM_POR_NOME) {
+    const bateuPalavra = entrada.palavrasChave.some((p) => nomeNormalizado.includes(p));
+    if (!bateuPalavra) continue;
+    if (entrada.checagemExtra && !entrada.checagemExtra(nomeNormalizado)) continue;
+    return { ncm: entrada.ncmInferido, descricao: entrada.descricao };
+  }
+  return null;
+}
