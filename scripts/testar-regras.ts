@@ -244,5 +244,96 @@ teste("ALIQ. FCP preenchida com valor errado -> Divergência detectada", () => {
   assert.ok(r.observacao.includes("ALIQ. FCP"));
 });
 
+console.log("\n=== Regressão urgente — NCM sujo/curto e NCM vazio não podem virar ST às cegas ===");
+
+teste("NCM sujo de 7 dígitos (chocolate, fora do anexo ST-BA 2026) -> Padrão A, não ST", () => {
+  const stBa2026 = anexo("ST-BA 2026", ["22030000", "24022000"]); // cerveja, cigarro — sem chocolate
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [stBa2026] };
+  const r = classificarProdutoCliente(
+    produto({
+      nome: "CHOC. LACTA VARIEDADES 332G",
+      ncm: "1806900", // 7 dígitos — falta o zero final de "18069000"
+      ncmOriginal: "1806900",
+      tributacao: "Substituição tributária",
+    }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5102");
+  assert.equal(r.cstIcms, "000");
+  assert.notEqual(r.status, "Dúvida — aguardando instrução");
+});
+
+teste("NCM vazio (wafer) -> Dúvida, nenhum campo de classificação preenchido", () => {
+  const stBa2026 = anexo("ST-BA 2026", ["22030000"]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [stBa2026] };
+  const r = classificarProdutoCliente(
+    produto({
+      nome: "WAFER MAXI CHOC. BAUDUCCO 130G",
+      ncm: "",
+      ncmOriginal: "",
+      tributacao: "Substituição tributária",
+    }),
+    contexto
+  );
+  assert.equal(r.status, "Dúvida — aguardando instrução");
+  assert.equal(r.cfopSaidas, "");
+  assert.equal(r.cstIcms, "");
+});
+
+teste("NCM vazio (whisky) -> Dúvida, nenhum campo de classificação preenchido", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "WHISKY TEACHER'S 250ML", ncm: "", ncmOriginal: "", tributacao: "Substituição tributária" }),
+    contextoPadrao
+  );
+  assert.equal(r.status, "Dúvida — aguardando instrução");
+  assert.equal(r.cfopSaidas, "");
+});
+
+teste("Nenhum produto com NCM começando com 1806 sai como ST (planilha real do Everildo)", () => {
+  const stBa2026 = anexo("ST-BA 2026", ["22030000", "24022000"]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [stBa2026] };
+  const nomes = [
+    "GAROTO OVO DE PASCOA JOLIE 150G",
+    "JAZAM COLORETI AMORE 500GR",
+    "SERENATA DE AMOR OVO DE PASCOA 120G",
+    "SURPRESA OVO PRINCESAS CAROAGEM 150G",
+  ];
+  for (const nome of nomes) {
+    const r = classificarProdutoCliente(
+      produto({ nome, ncm: "18069000", ncmOriginal: "18069000", tributacao: "Substituição tributária" }),
+      contexto
+    );
+    assert.equal(r.cfopSaidas, "5102", `${nome}: esperava CFOP 5102, veio ${r.cfopSaidas}`);
+    assert.equal(r.cstIcms, "000", `${nome}: esperava CST ICMS 000, veio ${r.cstIcms}`);
+  }
+});
+
+teste("Nenhum produto com NCM vazio sai com CFOP preenchido (todos vão para Dúvida)", () => {
+  const stBa2026 = anexo("ST-BA 2026", ["22030000"]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [stBa2026] };
+  const nomes = ["WAFER MIMNUETO LEITE", "WAFER MIRABEL CHOCOLATE 106G", "WHISKAS LATA PEIXE 290GR"];
+  for (const nome of nomes) {
+    const r = classificarProdutoCliente(
+      produto({ nome, ncm: "", ncmOriginal: "", tributacao: "Substituição tributária" }),
+      contexto
+    );
+    assert.equal(r.status, "Dúvida — aguardando instrução", `${nome}: esperava Dúvida, veio ${r.status}`);
+    assert.equal(r.cfopSaidas, "", `${nome}: CFOP deveria estar em branco`);
+  }
+});
+
+teste("NCM sujo e curto que ESTÁ coberto por um prefixo do anexo ainda vira ST corretamente", () => {
+  // Anexo em nível de categoria (4 dígitos, válido pelo piso de lib/anexos.ts) casa
+  // mesmo com um NCM de produto sujo/curto, desde que o prefixo do anexo caiba nele.
+  const stBa2026 = anexo("ST-BA 2026", ["2203"]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [stBa2026] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "Cerveja lata 350ml", ncm: "220300", ncmOriginal: "220300", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5405");
+  assert.equal(r.cstIcms, "060");
+});
+
 console.log(`\n${passou} passaram, ${falhou} falharam.\n`);
 if (falhou > 0) process.exit(1);
