@@ -38,6 +38,18 @@ function anexo(nome: string, ncms: string[]): AnexoEmpresa {
   };
 }
 
+/** Variante de `anexo()` que aceita a Descrição de cada linha (ex.: "2106.9" + "Bebidas energéticas em lata"). */
+function anexoComDescricao(nome: string, linhas: Array<[ncm: string, descricao: string]>): AnexoEmpresa {
+  return {
+    id: nome,
+    nome,
+    ativo: true,
+    colunas: { ncm: 0, descricao: 1 },
+    linhas: linhas.map(([ncm, descricao]) => ({ ncm, descricao })),
+    criadoEm: new Date().toISOString(),
+  };
+}
+
 function produto(overrides: Partial<ClientProdutoEntrada>): ClientProdutoEntrada {
   return {
     linha: 1,
@@ -124,6 +136,127 @@ teste("parsearAnexo descarta prefixo curto demais (proteção contra coluna mal 
   const linhas = parsearAnexo(linhasBrutas, { ncm: 0, descricao: 1 });
   assert.equal(linhas.length, 1);
   assert.equal(linhas[0].ncm, "22030000");
+});
+
+console.log(
+  "\n=== Bloco 8 — refinamento por palavra-chave do anexo de ST (NCM de família ampla, ex.: 2106.9) ==="
+);
+
+// Anexo modelado a partir dos itens reais do ST-BA citados pelo usuário: sorvete
+// (item 15.1, NCM 2105, cobertura total — sem exceção), xarope/cápsula pré-mix
+// (3.11.0/3.11.1), bebidas energéticas (3.12.0/3.12.1/3.12.2) e hidroeletrolíticas
+// (3.14), todos dentro da família ampla NCM 2106.9 — que também cobre achocolatados,
+// sucos em pó, chás em pó e bebidas lácteas (não-ST) sob o mesmo prefixo.
+function anexoStBaBebidas(): AnexoEmpresa {
+  return anexoComDescricao("ST-BA 2026 — bebidas", [
+    ["2105", "Sorvetes de qualquer espécie"],
+    ["2106901", "Xarope ou extrato concentrado destinados ao preparo de refrigerante em máquina pré-mix ou post-mix"],
+    ["2106901", "Cápsula de refrigerante"],
+    ["21069", "Bebidas energéticas em lata, PET ou vidro"],
+    ["21069", "Bebidas hidroeletrolíticas"],
+  ]);
+}
+
+teste("NCM 21050010 'NT NAPOLITANO TRAD' -> ST (2105 é sorvete inteiro, sem palavra-chave exigida)", () => {
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaBebidas()] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "NT NAPOLITANO TRAD", ncm: "21050010", ncmOriginal: "21050010", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5405");
+  assert.equal(r.cstIcms, "060");
+});
+
+teste("NCM 21050010 'GALAK SORVETE' -> ST", () => {
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaBebidas()] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "GALAK SORVETE", ncm: "21050010", ncmOriginal: "21050010", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5405");
+  assert.equal(r.cstIcms, "060");
+});
+
+const casosNaoStBebidaLactea2106 = [
+  "CHÁ MATTE LEÃO SACHÊ",
+  "FRESH LIMÃO 15G",
+  "FRISCO ABACAXI JONES",
+  "BEBIDA LÁCTEA CONFIRMA",
+];
+for (const nome of casosNaoStBebidaLactea2106) {
+  teste(`NCM 21069010 '${nome}' -> CFOP 5102, NÃO ST (não bate palavra-chave de nenhum item do anexo)`, () => {
+    const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaBebidas()] };
+    const r = classificarProdutoCliente(
+      produto({ nome, ncm: "21069010", ncmOriginal: "21069010", tributacao: "Tributado" }),
+      contexto
+    );
+    assert.equal(r.cfopSaidas, "5102", `${nome}: veio ${r.cfopSaidas}`);
+    assert.equal(r.cstIcms, "000", `${nome}: veio ${r.cstIcms}`);
+    assert.notEqual(r.status, "Dúvida — aguardando instrução", `${nome}: veio Dúvida`);
+  });
+}
+
+const casosStEnergeticoOuIsotonico2106 = ["RED BULL ENERGY DRINK 250ML", "MONSTER ENERGY 473ML", "GATORADE MARACUJÁ 500ML"];
+for (const nome of casosStEnergeticoOuIsotonico2106) {
+  teste(`NCM 21069010 '${nome}' -> ST (bate palavra-chave energética/isotônica)`, () => {
+    const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaBebidas()] };
+    const r = classificarProdutoCliente(
+      produto({ nome, ncm: "21069010", ncmOriginal: "21069010", tributacao: "Tributado" }),
+      contexto
+    );
+    assert.equal(r.cfopSaidas, "5405", `${nome}: veio ${r.cfopSaidas}`);
+    assert.equal(r.cstIcms, "060", `${nome}: veio ${r.cstIcms}`);
+  });
+}
+
+teste("NCM 22030000 'SKOL LATA 350ML' -> ST (2203 é específico o bastante, casa direto pelo prefixo)", () => {
+  const stBa2026 = anexo("ST-BA 2026", ["22030000", "24022000"]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [stBa2026] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "SKOL LATA 350ML", ncm: "22030000", ncmOriginal: "22030000", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5405");
+  assert.equal(r.cstIcms, "060");
+});
+
+teste("NCM em família ampla sem descrição reconhecida e Nome vazio -> Dúvida (nunca ST no escuro)", () => {
+  const anexoAmbiguo = anexoComDescricao("ST-BA hipotético", [["21069", "Outras preparações alimentícias diversas"]]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoAmbiguo] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "", ncm: "21069010", ncmOriginal: "21069010", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.status, "Dúvida — aguardando instrução");
+  assert.equal(r.cfopSaidas, "");
+});
+
+teste("NCM em família ampla com descrição NÃO mapeada -> Dúvida em vez de assumir ST (prefixo curto)", () => {
+  const anexoAmbiguo = anexoComDescricao("ST-BA hipotético", [["21069", "Outras preparações alimentícias diversas"]]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoAmbiguo] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "CHÁ MATTE LEÃO SACHÊ", ncm: "21069010", ncmOriginal: "21069010", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.status, "Dúvida — aguardando instrução");
+  assert.equal(r.cfopSaidas, "");
+});
+
+teste("Anexo temporário (upload na tela de instruções) recebe o mesmo refinamento por palavra-chave", () => {
+  // Um anexo "temporário" é, no motor, apenas mais um AnexoEmpresa em anexosAtivos —
+  // não existe caminho de código separado para anexo salvo vs. anexo por execução, então
+  // este teste confirma que o mesmo `anexoStBaBebidas()` usado acima também vale aqui.
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaBebidas()] };
+  const semSt = classificarProdutoCliente(
+    produto({ nome: "CHÁ MATTE LEÃO SACHÊ", ncm: "21069010", ncmOriginal: "21069010", tributacao: "Tributado" }),
+    contexto
+  );
+  const comSt = classificarProdutoCliente(
+    produto({ nome: "MONSTER ENERGY 473ML", ncm: "21069010", ncmOriginal: "21069010", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(semSt.cfopSaidas, "5102");
+  assert.equal(comSt.cfopSaidas, "5405");
 });
 
 console.log("\n=== Bloco 2 — FCP 2% cosméticos (Bahia, IN SAT nº 005/2016) ===");
