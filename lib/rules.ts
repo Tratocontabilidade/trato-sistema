@@ -30,7 +30,7 @@ import {
 } from "./tables";
 import { resolverRegimeFederal } from "./regras-federais";
 import { produtoPertenceAoSegmento, type Diretiva } from "./instructions";
-import { buscarNoAnexo } from "./anexos";
+import { buscarNoAnexo, type ResultadoAnexo } from "./anexos";
 import type { ClientProdutoEntrada, ClientProdutoResultado, ContextoClassificacao, StatusLinha } from "./types";
 
 const CONTEXTO_PADRAO: ContextoClassificacao = { regime: "nao_cumulativo", diretivas: [] };
@@ -373,12 +373,22 @@ export function classificarProdutoCliente(
   // tem exatamente 8 dígitos é o que permitia a coluna Tributação (que pode
   // trazer um valor desatualizado) decidir ST sozinha, sem confirmação.
   const anexosAtivos = (contexto.anexosAtivos ?? []).filter((a) => a.ativo);
-  const ncmNoAnexo = anexosAtivos.length > 0 ? buscarNoAnexo(ncmDigitos, anexosAtivos) : null;
-  if (ncmNoAnexo !== null && (categoria === "tributado" || categoria === "st")) {
-    if (ncmNoAnexo && categoria !== "st") {
+  const resultadoAnexo: ResultadoAnexo | null =
+    anexosAtivos.length > 0 ? buscarNoAnexo(ncmDigitos, nomeNormalizado, anexosAtivos) : null;
+  // "ambiguo": o NCM cai num prefixo amplo do anexo (ex.: "2106.9"), mas o Nome do
+  // produto não confirma nem descarta a palavra-chave exigida pela descrição da
+  // linha (ex.: "bebidas energéticas") — regra de ouro: não decide ST no escuro.
+  if (resultadoAnexo === "ambiguo") {
+    return construirResultadoDuvida(
+      input,
+      "NCM consta em anexo ativo da empresa num item de família ampla, mas o Nome do produto não confirma a palavra-chave exigida pela descrição do item — não é possível determinar ST com segurança."
+    );
+  }
+  if (resultadoAnexo !== null && (categoria === "tributado" || categoria === "st")) {
+    if (resultadoAnexo === "st" && categoria !== "st") {
       pendencias.push({ peso: 0, mensagem: "ST determinada pelo anexo ativo da empresa (NCM encontrado)." });
       categoria = "st";
-    } else if (!ncmNoAnexo && categoria === "st") {
+    } else if (resultadoAnexo === "nao_st" && categoria === "st") {
       pendencias.push({
         peso: 0,
         mensagem: "NCM não consta em nenhum anexo ativo da empresa — tratado como tributado normal (sem ST).",
@@ -388,14 +398,14 @@ export function classificarProdutoCliente(
   }
 
   // Validação cruzada: CFOP já preenchido pelo cliente indicando ST/normal em desacordo com o anexo.
-  if (ncmNoAnexo !== null && estaPreenchido(input.cfopSaidas)) {
+  if (resultadoAnexo !== null && estaPreenchido(input.cfopSaidas)) {
     const cfopDigitos = String(input.cfopSaidas).replace(/\D/g, "");
-    if (cfopDigitos === "5405" && !ncmNoAnexo) {
+    if (cfopDigitos === "5405" && resultadoAnexo === "nao_st") {
       pendencias.push({
         peso: 2,
         mensagem: "CFOP informado indica Substituição Tributária (5405), mas o NCM não consta em nenhum anexo ativo da empresa.",
       });
-    } else if (cfopDigitos === "5102" && ncmNoAnexo) {
+    } else if (cfopDigitos === "5102" && resultadoAnexo === "st") {
       pendencias.push({
         peso: 2,
         mensagem: "CFOP informado indica tributação normal (5102), mas o NCM consta em anexo ativo da empresa como ST.",

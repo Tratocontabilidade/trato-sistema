@@ -306,6 +306,31 @@ funciona para um NCM sujo/truncado do cliente (ex.: "1806900" com 7 dígitos
 em vez de "18069000") — só um NCM **vazio** é tratado como impossível de
 decidir e vira Dúvida.
 
+**Refinamento por palavra-chave para NCMs de família ampla.** Casar só por
+prefixo não basta quando o anexo lista um NCM amplo que cobre produtos bem
+diferentes entre si — o exemplo real é o NCM 2106.90.1x ("outras
+preparações alimentícias não especificadas"), que no ST-BA cobre itens tão
+distintos quanto bebidas energéticas, xarope pré-mix, bebidas
+hidroeletrolíticas — mas também achocolatados, sucos em pó e chás em pó que
+**não** são ST. Casar por `startsWith` sozinho varreria esses últimos para
+dentro da ST por engano. Para evitar isso, `lib/tables.ts` tem uma tabela
+`PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO` que mapeia trechos da **Descrição** de
+uma linha do anexo (ex.: "Bebidas energéticas em lata") para as
+palavras-chave que precisam aparecer no **Nome** do produto para confirmar
+o casamento (ex.: "energética"/"energético"/"energy"). Quando a descrição
+da linha bate com uma entrada mapeada, essa entrada manda — não importa
+quantos dígitos o prefixo do NCM tenha. Quando não bate com nenhuma
+entrada mapeada, o critério de reserva é: sem nenhuma descrição no anexo
+(só o código do NCM), mantém o comportamento histórico de casar direto pelo
+prefixo; com uma descrição não reconhecida e um prefixo de menos de 6
+dígitos, não dá pra confiar que ela cobre a família inteira, então vira
+`Dúvida — aguardando instrução` em vez de assumir ST às cegas (regra de
+ouro). Isso vale igualmente para anexos salvos na empresa e para o anexo
+temporário da tela de Instruções — os dois passam pelo mesmo
+`buscarNoAnexo` em `lib/anexos.ts`. Sorvete (NCM 2105) é a exceção: como o
+capítulo inteiro é sorvete, a entrada mapeada não exige palavra-chave
+nenhuma no Nome.
+
 No início de cada processamento, a tela **Instruções** também permite subir
 um **anexo de ST só para aquela rodada** (mesma detecção de colunas e
 mapeamento manual de fallback do cadastro da empresa). Esse anexo temporário
@@ -468,6 +493,15 @@ automaticamente um novo deploy.
   busca de palavras-chave no campo Nome do produto, pois o layout do cliente
   não tem uma coluna dedicada de segmento. É uma aproximação: produtos com
   nomes atípicos podem não ser reconhecidos por um segmento esperado.
+- O refinamento por palavra-chave do casamento com anexos de ST
+  (`PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO` em `lib/tables.ts`) também é
+  heurístico: cobre os padrões de descrição observados no ST-BA real
+  (sorvete, xarope/cápsula de refrigerante, bebidas energéticas,
+  hidroeletrolíticas) e precisa ganhar novas entradas conforme outras
+  famílias amplas de NCM aparecerem em anexos futuros. Uma linha de anexo
+  com prefixo curto (< 6 dígitos) e descrição não reconhecida não é
+  presumida como ST nem como não-ST — vira Dúvida, mesmo que isso gere mais
+  revisão manual do que um casamento por prefixo simples geraria.
 - Anexos de ST e histórico de processamentos ficam em `localStorage`, que tem
   capacidade finita (tipicamente alguns MB por origem). O histórico mantém só
   as 20 execuções mais recentes por empresa, descartando as mais antigas

@@ -5,6 +5,7 @@
 
 import * as XLSX from "xlsx";
 import type { AnexoColunas, AnexoEmpresa, LinhaAnexo } from "./empresas";
+import { buscarRegraPalavraChaveAnexo } from "./tables";
 
 const REGEX_DIACRITICOS = /[\u0300-\u036f]/g;
 
@@ -82,8 +83,62 @@ export function parsearAnexo(linhas: LinhaBruta[], colunas: AnexoColunas): Linha
   return resultado;
 }
 
-/** Verifica se um NCM consta em algum anexo ativo da empresa (usado para decidir ST no Bloco 3). */
-export function buscarNoAnexo(ncmDigitos: string, anexosAtivos: AnexoEmpresa[]): boolean {
-  if (!ncmDigitos) return false;
-  return anexosAtivos.some((anexo) => anexo.linhas.some((l) => ncmDigitos.startsWith(l.ncm)));
+/**
+ * Resultado do casamento de um produto contra os anexos ativos:
+ * - "st": achou uma linha de anexo cujo NCM/descrição casa com o produto → é ST.
+ * - "nao_st": nenhuma linha de anexo casa (nem por prefixo nem por palavra-chave) → não é ST.
+ * - "ambiguo": o NCM cai num prefixo amplo de um anexo, mas não há como confirmar
+ *   pelo Nome do produto (ou a linha do anexo é ambígua por natureza) — dúvida.
+ */
+export type ResultadoAnexo = "st" | "nao_st" | "ambiguo";
+
+/**
+ * Verifica se um NCM consta em algum anexo ativo da empresa (usado para decidir ST no
+ * Bloco 3). NCMs de família ampla (ex.: "2106.9") não bastam sozinhos — quando a
+ * descrição da linha do anexo bate com uma entrada conhecida em
+ * `PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO` (lib/tables.ts), o Nome do produto precisa
+ * conter as palavras-chave exigidas para confirmar o casamento, não importa quantos
+ * dígitos o prefixo do anexo tenha (ex.: o item de xarope pré-mix do ST-BA já vem
+ * com 7 dígitos, mas ainda cobre só uma fração dos produtos que compartilham esse
+ * prefixo).
+ *
+ * Quando a linha do anexo NÃO tem mapeamento conhecido, o critério é:
+ * - Sem descrição alguma (só o código do NCM, como listas de categoria costumam
+ *   trazer) → mantém o comportamento histórico: casa direto pelo prefixo, mesmo
+ *   curto. Não há texto nenhum para desconfiar, então a lista é o que manda.
+ * - Com descrição, mas não reconhecida, e prefixo com menos de 6 dígitos → não dá
+ *   pra saber se ela cobre a família toda ou só uma fração — vira "ambiguo"
+ *   (dúvida) em vez de assumir ST por conta própria.
+ * - Prefixo com 6+ dígitos é tratado como específico o bastante para casar direto,
+ *   com ou sem descrição.
+ */
+export function buscarNoAnexo(
+  ncmDigitos: string,
+  nomeNormalizado: string,
+  anexosAtivos: AnexoEmpresa[]
+): ResultadoAnexo {
+  if (!ncmDigitos) return "nao_st";
+  let algumAmbiguo = false;
+  for (const anexo of anexosAtivos) {
+    for (const linha of anexo.linhas) {
+      if (!ncmDigitos.startsWith(linha.ncm)) continue;
+      const regra = buscarRegraPalavraChaveAnexo(linha.descricao);
+      if (regra) {
+        if (regra.gruposPalavraChaveProduto.length === 0) return "st";
+        if (!nomeNormalizado) {
+          algumAmbiguo = true;
+          continue;
+        }
+        const bateTodosOsGrupos = regra.gruposPalavraChaveProduto.every((grupo) =>
+          grupo.some((k) => nomeNormalizado.includes(k))
+        );
+        if (bateTodosOsGrupos) return "st";
+        continue;
+      }
+      const temDescricao = Boolean(linha.descricao && linha.descricao.trim());
+      if (linha.ncm.length >= 6 || !temDescricao) return "st";
+      algumAmbiguo = true;
+    }
+  }
+  return algumAmbiguo ? "ambiguo" : "nao_st";
 }

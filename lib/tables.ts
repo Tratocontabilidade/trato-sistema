@@ -585,3 +585,93 @@ export function avaliarBeneficioIcmsBa(ncmDigitos: string, nomeNormalizado: stri
 
   return null;
 }
+
+// ---------------------------------------------------------------------
+// Refinamento por palavra-chave do casamento com anexos de ST (lib/anexos.ts).
+//
+// NCMs de família ampla (ex.: "2106.9") cobrem dezenas de produtos
+// completamente diferentes — um anexo de ST-BA real costuma listar só
+// alguns deles (ex.: bebidas energéticas, xarope pré-mix), não a família
+// inteira. Casar por `startsWith` sozinho nesses casos varre produtos que
+// não deveriam ser ST (ex.: achocolatados, sucos em pó, chás em pó com NCM
+// 2106.90.10 sendo capturados por um item de "bebidas energéticas").
+//
+// Esta tabela mapeia trechos da Descrição de uma linha do anexo para os
+// grupos de palavras-chave que precisam aparecer no Nome do produto para
+// confirmar o casamento. Quando a descrição da linha do anexo bate com uma
+// entrada aqui, essa entrada manda — mesmo que o NCM da linha já tenha 6+
+// dígitos (ex.: o item de xarope pré-mix do ST-BA vem com um NCM de 7
+// dígitos, mas ainda cobre só uma fração dos produtos que compartilham
+// esse prefixo — sem a palavra-chave, viraria o mesmo problema de novo).
+// Quando NENHUMA entrada bate com a descrição, `lib/anexos.ts` usa um
+// critério de tamanho de prefixo como reserva (ver `buscarNoAnexo`).
+// ---------------------------------------------------------------------
+
+export interface RegraPalavraChaveAnexo {
+  /** Trechos (já normalizados — sem acento, minúsculo) que, se aparecerem na Descrição da linha do anexo, acionam esta regra. */
+  gatilhosDescricao: string[];
+  /**
+   * Grupos de palavras-chave exigidos no Nome do produto para confirmar o
+   * casamento — TODOS os grupos precisam ter ao menos uma palavra-chave
+   * presente (E lógico entre grupos, OU dentro do grupo). Grupo vazio =
+   * a descrição já é suficientemente específica sozinha (nenhuma
+   * palavra-chave extra necessária), ex.: "sorvetes de qualquer espécie".
+   */
+  gruposPalavraChaveProduto: string[][];
+}
+
+export const PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO: RegraPalavraChaveAnexo[] = [
+  {
+    // "Sorvetes de qualquer espécie" — cobertura total do NCM 2105, sem exceção.
+    gatilhosDescricao: ["sorvete"],
+    gruposPalavraChaveProduto: [],
+  },
+  {
+    // "Xarope ou extrato concentrado destinados ao preparo de refrigerante em máquina pré-mix ou post-mix".
+    gatilhosDescricao: ["xarope", "extrato concentrado"],
+    gruposPalavraChaveProduto: [
+      ["xarope", "concentrado"],
+      ["refrigerante", "pre-mix", "pre mix", "premix", "post-mix", "post mix", "postmix"],
+    ],
+  },
+  {
+    // "Cápsula de refrigerante".
+    gatilhosDescricao: ["capsula de refrigerante", "capsula de bebida"],
+    gruposPalavraChaveProduto: [["capsula"], ["refrigerante"]],
+  },
+  {
+    // "Bebidas energéticas em lata/PET/vidro".
+    gatilhosDescricao: ["energetica", "energetico"],
+    gruposPalavraChaveProduto: [["energetica", "energetico", "energy"]],
+  },
+  {
+    // "Bebidas hidroeletrolíticas".
+    gatilhosDescricao: ["hidroeletrolitica", "hidroeletrolitico", "isotonico", "isotonica"],
+    gruposPalavraChaveProduto: [["hidroeletrolitica", "hidroeletrolitico", "isotonico", "isotonica", "gatorade"]],
+  },
+];
+
+const REGEX_DIACRITICOS_ANEXO = /[\u0300-\u036f]/g;
+function normalizarTextoAnexo(v: string): string {
+  return v
+    .normalize("NFD")
+    .replace(REGEX_DIACRITICOS_ANEXO, "")
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Procura, na descrição de uma linha do anexo (texto livre, ex.: "Bebidas
+ * energéticas em lata"), uma regra de palavra-chave conhecida. Retorna
+ * `null` quando a descrição não bate com nada mapeado — `lib/anexos.ts`
+ * decide o comportamento padrão nesse caso (ver `buscarNoAnexo`).
+ */
+export function buscarRegraPalavraChaveAnexo(descricao: string | undefined): RegraPalavraChaveAnexo | null {
+  if (!descricao) return null;
+  const descricaoNormalizada = normalizarTextoAnexo(descricao);
+  return (
+    PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO.find((regra) =>
+      regra.gatilhosDescricao.some((g) => descricaoNormalizada.includes(g))
+    ) ?? null
+  );
+}
