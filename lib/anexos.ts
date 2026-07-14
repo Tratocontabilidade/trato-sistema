@@ -90,20 +90,35 @@ export interface ItemAnexoDecisao {
 }
 
 /**
+ * Por que um casamento foi rejeitado — usado só para compor a Observação da linha
+ * (ver lib/rules.ts), nunca para mudar o resultado final (sempre Tributado normal).
+ * - "qualificador_ausente": a Descrição do anexo é altamente específica (ex.: "PARA
+ *   PÃES") e nenhum dos qualificadores obrigatórios apareceu no Nome do produto.
+ * - "exclusao": o Nome do produto contém uma palavra que indica um uso alternativo do
+ *   mesmo NCM (ex.: algodão cosmético em vez de medicinal).
+ * - "palavra_chave_ausente": nenhuma palavra-chave (curada ou extraída da Descrição)
+ *   apareceu no Nome do produto — o caso genérico já existente antes desta camada.
+ */
+export type MotivoRejeicaoAnexo =
+  | { tipo: "qualificador_ausente"; qualificadores: string[] }
+  | { tipo: "exclusao"; palavraExcluida: string }
+  | { tipo: "palavra_chave_ausente" };
+
+/**
  * Decisão do casamento de um produto contra os anexos ativos:
  * - "st": achou uma linha de anexo cujo NCM/descrição casa com o produto → é ST.
  *   `item` identifica a linha; `motivoSt` diz se foi por palavra-chave confirmada
  *   no Nome ou porque a linha não tinha descrição útil pra checar (casamento
  *   direto por NCM, comportamento histórico).
- * - "rejeitado": o NCM bateu com uma linha do anexo, mas nenhuma palavra-chave da
- *   Descrição apareceu no Nome do produto — decisão de política: NÃO é mais
- *   Dúvida, é tratado como Tributado normal, com `item` citado na Observação
- *   para a analista auditar depois (ver lib/rules.ts).
+ * - "rejeitado": o NCM bateu com uma linha do anexo, mas o Nome do produto não
+ *   confirmou (ou foi excluído explicitamente) — decisão de política: NÃO é mais
+ *   Dúvida, é tratado como Tributado normal, com `item`/`motivoRejeicao` citados na
+ *   Observação para a analista auditar depois (ver lib/rules.ts).
  * - "nao_st": nenhuma linha de nenhum anexo ativo bate com o NCM.
  */
 export type DecisaoAnexo =
   | { tipo: "st"; motivoSt: "palavra_chave" | "sem_descricao_util"; item: ItemAnexoDecisao }
-  | { tipo: "rejeitado"; item: ItemAnexoDecisao }
+  | { tipo: "rejeitado"; item: ItemAnexoDecisao; motivoRejeicao: MotivoRejeicaoAnexo }
   | { tipo: "nao_st" };
 
 /**
@@ -116,9 +131,12 @@ export type DecisaoAnexo =
  * 1. `PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO` (lib/tables.ts) — tabela curada com sinônimos
  *    de marca já validados em ciclos anteriores (ex.: "energy"/"gatorade" para bebidas
  *    energéticas/hidroeletrolíticas, já que o Nome real do produto raramente usa o
- *    termo genérico da lei). Quando bate, manda — inclusive o caso de grupo vazio
- *    (ex.: sorvete, onde a categoria inteira do NCM já é isso, sem exigir palavra
- *    nenhuma no Nome).
+ *    termo genérico da lei). Cada entrada curada pode, nessa ordem: (a) exigir um
+ *    qualificador obrigatório no Nome (ex.: "pão"/"pães" para misturas de panificação —
+ *    sem ele, rejeita antes de olhar mais nada); (b) rejeitar por exclusão se o Nome
+ *    contiver uma palavra de uso alternativo do mesmo NCM (ex.: "maquiagem"/"esmalte"
+ *    para algodão cosmético vs. medicinal); (c) casar pelos grupos de palavra-chave
+ *    já existentes (grupo vazio = a descrição já é suficientemente específica sozinha).
  * 2. Extração automática (`extrairPalavrasChaveDescricao`) — para qualquer outra
  *    Descrição não coberta pela tabela curada (ex.: "Outros pães", "Outros bolos... e
  *    pizzas"). Quando a extração não encontra nenhuma palavra-chave útil (Descrição
@@ -131,7 +149,7 @@ export type DecisaoAnexo =
  */
 export function buscarNoAnexo(ncmDigitos: string, nomeNormalizado: string, anexosAtivos: AnexoEmpresa[]): DecisaoAnexo {
   if (!ncmDigitos) return { tipo: "nao_st" };
-  let candidatoRejeitado: ItemAnexoDecisao | undefined;
+  let candidatoRejeitado: { item: ItemAnexoDecisao; motivoRejeicao: MotivoRejeicaoAnexo } | undefined;
 
   for (const anexo of anexosAtivos) {
     for (const linha of anexo.linhas) {
@@ -140,6 +158,29 @@ export function buscarNoAnexo(ncmDigitos: string, nomeNormalizado: string, anexo
 
       const regraCurada = buscarRegraPalavraChaveAnexo(linha.descricao);
       if (regraCurada) {
+        if (regraCurada.qualificadoresObrigatorios && regraCurada.qualificadoresObrigatorios.length > 0) {
+          const qualificadorPresente =
+            Boolean(nomeNormalizado) && regraCurada.qualificadoresObrigatorios.some((q) => nomeNormalizado.includes(q));
+          if (!qualificadorPresente) {
+            if (!candidatoRejeitado) {
+              candidatoRejeitado = {
+                item,
+                motivoRejeicao: { tipo: "qualificador_ausente", qualificadores: regraCurada.qualificadoresObrigatorios },
+              };
+            }
+            continue;
+          }
+        }
+        if (regraCurada.exclusoesPorPalavra && regraCurada.exclusoesPorPalavra.length > 0) {
+          const palavraExcluida =
+            nomeNormalizado ? regraCurada.exclusoesPorPalavra.find((ex) => nomeNormalizado.includes(ex)) : undefined;
+          if (palavraExcluida) {
+            if (!candidatoRejeitado) {
+              candidatoRejeitado = { item, motivoRejeicao: { tipo: "exclusao", palavraExcluida } };
+            }
+            continue;
+          }
+        }
         if (regraCurada.gruposPalavraChaveProduto.length === 0) {
           return { tipo: "st", motivoSt: "palavra_chave", item };
         }
@@ -147,7 +188,7 @@ export function buscarNoAnexo(ncmDigitos: string, nomeNormalizado: string, anexo
           Boolean(nomeNormalizado) &&
           regraCurada.gruposPalavraChaveProduto.every((grupo) => grupo.some((k) => nomeNormalizado.includes(k)));
         if (bateTodosOsGrupos) return { tipo: "st", motivoSt: "palavra_chave", item };
-        if (!candidatoRejeitado) candidatoRejeitado = item;
+        if (!candidatoRejeitado) candidatoRejeitado = { item, motivoRejeicao: { tipo: "palavra_chave_ausente" } };
         continue;
       }
 
@@ -158,9 +199,11 @@ export function buscarNoAnexo(ncmDigitos: string, nomeNormalizado: string, anexo
       if (nomeContemPalavraChave(nomeNormalizado, palavrasChave)) {
         return { tipo: "st", motivoSt: "palavra_chave", item };
       }
-      if (!candidatoRejeitado) candidatoRejeitado = item;
+      if (!candidatoRejeitado) candidatoRejeitado = { item, motivoRejeicao: { tipo: "palavra_chave_ausente" } };
     }
   }
 
-  return candidatoRejeitado ? { tipo: "rejeitado", item: candidatoRejeitado } : { tipo: "nao_st" };
+  return candidatoRejeitado
+    ? { tipo: "rejeitado", item: candidatoRejeitado.item, motivoRejeicao: candidatoRejeitado.motivoRejeicao }
+    : { tipo: "nao_st" };
 }

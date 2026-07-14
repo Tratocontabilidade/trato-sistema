@@ -1113,5 +1113,202 @@ teste("cClassTrib de leite confirmado pelo Nome (NCM 04012010) -> 200003", () =>
   assert.equal(r.cclasstrib, "200003");
 });
 
+console.log("\n=== Bloco 10 — qualificadores obrigatórios e exclusões negativas no casamento com anexo ===");
+
+// Caso 1 — mistura para pão (NCM 1901.20) x mistura para bolo/pão de queijo (mesmo NCM).
+function anexoStBaMisturaPao(): AnexoEmpresa {
+  return anexoComDescricao("ST-BA 2026 — misturas de panificação", [
+    ["190120", "Misturas e preparações para pães, com no mínimo 80% de farinha de trigo"],
+  ]);
+}
+
+const casosRejeitadosMisturaPao = [
+  { nome: "MISTURA BOLO CENOURA", ncm: "19012000" },
+  { nome: "MISTURA P/ BOLO CHOCOLATE", ncm: "19012000" },
+  { nome: "MISTURA BOLO PETIT SUISSE", ncm: "19012000" },
+  { nome: "PÃO DE QUEIJO CONGELADO", ncm: "19012090" },
+  { nome: "MISTURA PÃO DE QUEIJO FORNO DE MINAS", ncm: "19012090" },
+];
+for (const { nome, ncm } of casosRejeitadosMisturaPao) {
+  teste(`NCM ${ncm} '${nome}' -> Tributado normal (não é mistura para pão de trigo)`, () => {
+    const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaMisturaPao()] };
+    const r = classificarProdutoCliente(produto({ nome, ncm, ncmOriginal: ncm, tributacao: "Tributado" }), contexto);
+    assert.equal(r.cfopSaidas, "5102", `${nome}: veio ${r.cfopSaidas}`);
+    assert.equal(r.cstIcms, "000", `${nome}: veio ${r.cstIcms}`);
+    assert.notEqual(r.status, "Dúvida — aguardando instrução", `${nome}: veio Dúvida`);
+  });
+}
+
+teste("NCM 19012000 'MISTURA PARA PÃO DE FORMA 500G' -> ST (contém 'pão', sem exclusão)", () => {
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaMisturaPao()] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "MISTURA PARA PÃO DE FORMA 500G", ncm: "19012000", ncmOriginal: "19012000", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5405");
+  assert.equal(r.cstIcms, "060");
+});
+
+// Caso 2 — álcool combustível (NCM 2207.10.9) x álcool doméstico/farmácia (mesmo NCM).
+function anexoStBaAlcoolCombustivel(): AnexoEmpresa {
+  return anexoComDescricao("ST-BA 2026 — álcool", [
+    ["220710", "Álcool etílico hidratado combustível, não desnaturado, com teor alcoólico igual ou superior a 80% vol."],
+  ]);
+}
+
+const casosRejeitadosAlcool = [
+  "ÁLCOOL LIQUIDO 1L",
+  "ÁLCOOL SELETO 1LT",
+  "ÁLCOOL 96° SANTA CRUZ",
+  "ÁLCOOL VALOR 500ML",
+  "ÁLCOOL GEL 70% ANTISSÉPTICO 500ML",
+];
+for (const nome of casosRejeitadosAlcool) {
+  teste(`NCM 22071090 '${nome}' -> Tributado normal (não é álcool combustível)`, () => {
+    const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaAlcoolCombustivel()] };
+    const r = classificarProdutoCliente(
+      produto({ nome, ncm: "22071090", ncmOriginal: "22071090", tributacao: "Tributado" }),
+      contexto
+    );
+    assert.equal(r.cfopSaidas, "5102", `${nome}: veio ${r.cfopSaidas}`);
+    assert.equal(r.cstIcms, "000", `${nome}: veio ${r.cstIcms}`);
+    assert.notEqual(r.status, "Dúvida — aguardando instrução", `${nome}: veio Dúvida`);
+  });
+}
+
+teste("NCM 22071090 'ÁLCOOL ETÍLICO COMBUSTÍVEL POSTO IPIRANGA' -> ST (combustível confirmado)", () => {
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaAlcoolCombustivel()] };
+  const r = classificarProdutoCliente(
+    produto({
+      nome: "ÁLCOOL ETÍLICO COMBUSTÍVEL POSTO IPIRANGA",
+      ncm: "22071090",
+      ncmOriginal: "22071090",
+      tributacao: "Tributado",
+    }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5405");
+  assert.equal(r.cstIcms, "060");
+});
+
+// Caso 3 — algodão medicinal (NCM 3005) x algodão cosmético (mesmo NCM).
+function anexoStBaAlgodaoMedicinal(): AnexoEmpresa {
+  return anexoComDescricao("ST-BA 2026 — curativos", [
+    ["3005", "Algodão, atadura, esparadrapo, gazes, pensos, sinapismos"],
+  ]);
+}
+
+const casosRejeitadosAlgodao = [
+  "ALGODÃO DISCO REMOVEDOR MAQUIAGEM",
+  "ALGODÃO DISCO DEMAQUILANTE POP",
+  "COTONETES ALGODÃO ESMALTE",
+];
+for (const nome of casosRejeitadosAlgodao) {
+  teste(`NCM 30059090 '${nome}' -> Tributado normal (algodão cosmético, não medicinal)`, () => {
+    const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaAlgodaoMedicinal()] };
+    const r = classificarProdutoCliente(
+      produto({ nome, ncm: "30059090", ncmOriginal: "30059090", tributacao: "Tributado" }),
+      contexto
+    );
+    assert.equal(r.cfopSaidas, "5102", `${nome}: veio ${r.cfopSaidas}`);
+    assert.equal(r.cstIcms, "000", `${nome}: veio ${r.cstIcms}`);
+    assert.notEqual(r.status, "Dúvida — aguardando instrução", `${nome}: veio Dúvida`);
+    assert.ok(r.observacao.includes("uso diferente"), r.observacao);
+  });
+}
+
+const casosStAlgodao = [
+  "ALGODÃO CREMER HIDRÓFILO 500G",
+  "ALGODÃO CREMER PACOTE COM ROLINHOS",
+  "GAZE ESTÉRIL 7.5X7.5CM CREMER",
+  "ATADURA CREPOM CREMER 10CM",
+];
+for (const nome of casosStAlgodao) {
+  teste(`NCM 30059090 '${nome}' -> ST (uso medicinal, sem palavra de exclusão)`, () => {
+    const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaAlgodaoMedicinal()] };
+    const r = classificarProdutoCliente(
+      produto({ nome, ncm: "30059090", ncmOriginal: "30059090", tributacao: "Tributado" }),
+      contexto
+    );
+    assert.equal(r.cfopSaidas, "5405", `${nome}: veio ${r.cfopSaidas}`);
+    assert.equal(r.cstIcms, "060", `${nome}: veio ${r.cstIcms}`);
+  });
+}
+
+teste("Observação de qualificador ausente cita os qualificadores esperados", () => {
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaMisturaPao()] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "MISTURA BOLO CENOURA", ncm: "19012000", ncmOriginal: "19012000", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.ok(r.observacao.includes("qualificador obrigatório"), r.observacao);
+  assert.ok(r.observacao.includes("pao"), r.observacao);
+});
+
+// Não perder: casos do ciclo anterior continuam intactos com os anexos deste ciclo isolados.
+teste("Não perder — PÃO DE FORMA (NCM 19059090, anexo de panificação diferente) continua ST + cclasstrib 200003", () => {
+  const anexoPanificacao = anexoComDescricao("ST-BA 2026 — panificação", [
+    ["19059090", "Outros pães"],
+    ["19059090", "Outros bolos industrializados e produtos de panificação, inclusive pizzas"],
+  ]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoPanificacao] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "PÃO DE FORMA WICKBOLD 500G", ncm: "19059090", ncmOriginal: "19059090", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5405");
+  assert.equal(r.cstIcms, "060");
+  assert.equal(r.cclasstrib, "200003");
+});
+
+teste("Não perder — sorvete NCM 2105 continua ST mesmo sem qualificador/exclusão definidos", () => {
+  const stBa2026 = anexoComDescricao("ST-BA 2026", [["2105", "Sorvetes de qualquer espécie"]]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [stBa2026] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "NT NAPOLITANO TRAD", ncm: "21050010", ncmOriginal: "21050010", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5405");
+  assert.equal(r.cstIcms, "060");
+});
+
+teste("Não perder — cerveja NCM 2203 continua ST", () => {
+  const stBa2026 = anexo("ST-BA 2026", ["22030000"]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [stBa2026] };
+  const r = classificarProdutoCliente(
+    produto({ nome: "SKOL LATA 350ML", ncm: "22030000", ncmOriginal: "22030000", tributacao: "Tributado" }),
+    contexto
+  );
+  assert.equal(r.cfopSaidas, "5405");
+  assert.equal(r.cstIcms, "060");
+});
+
+teste("Não perder — cosmético NCM 3304 continua não-ST + FCP 2% (não afetado pelas novas regras de 3005)", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "BATOM LIQ DAILUS SISSONE", ncm: "33041000", ncmOriginal: "33041000", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.cfopSaidas, "5102");
+  assert.equal(r.cstIcms, "000");
+  assert.equal(r.aliqFcp, 2);
+});
+
+teste("Não perder — hortifrúti fresco continua isento (CST 040)", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "TOMATE CEREJA 500G", ncm: "07020000", ncmOriginal: "07020000", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.cstIcms, "040");
+});
+
+teste("Não perder — regime não-cumulativo (Lucro Real) continua PIS 1,65% / COFINS 7,6%", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "Produto qualquer", ncm: "39269090", ncmOriginal: "39269090", tributacao: "Tributado" }),
+    { regime: "nao_cumulativo", diretivas: [] }
+  );
+  assert.equal(r.pis, 1.65);
+  assert.equal(r.cofins, 7.6);
+});
+
 console.log(`\n${passou} passaram, ${falhou} falharam.\n`);
 if (falhou > 0) process.exit(1);
