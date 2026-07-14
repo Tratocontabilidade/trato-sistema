@@ -368,6 +368,32 @@ bolos... pizzas" no mesmo NCM 1905.90.90); só rejeita se **nenhuma** linha
 confirmar. Isso vale igualmente para anexos salvos na empresa e para o
 anexo temporário da tela de Instruções — os dois passam pela mesma função.
 
+**Qualificador obrigatório e exclusão por palavra — quando "bater uma
+palavra-chave" não basta.** A tabela curada também suporta duas camadas
+extras, verificadas nessa ordem antes dos grupos de palavra-chave normais:
+
+1. **Qualificador obrigatório** (`qualificadoresObrigatorios`) — para itens
+   do anexo cuja Descrição é altamente específica dentro de um NCM amplo.
+   Ex.: o item "misturas/preparações **para pães**" (NCM 1901.20) não cobre
+   mistura para bolo nem pão de queijo, mesmo estando no mesmo NCM — sem
+   "pão"/"pães" no Nome, rejeita antes de olhar mais nada.
+2. **Exclusão por palavra** (`exclusoesPorPalavra`) — para NCMs de uso
+   duplo, onde o padrão é confirmar mas certas palavras no Nome indicam o
+   uso alternativo. Ex.: o item "algodão, atadura, esparadrapo, gazes..."
+   (NCM 3005, seção de medicamentos) é ST por padrão, mas "maquiagem"/
+   "esmalte"/"demaquilante" no Nome indicam algodão cosmético (mesmo NCM,
+   tratamento fiscal diferente) — rejeita mesmo sem checar mais nada.
+   Também cobre o caso combinado (qualificador + exclusão juntos): o item de
+   álcool combustível (NCM 2207.10.9) exige "combustível"/"carro"/"veículo"
+   no Nome **e** rejeita se aparecer "limpeza"/"doméstico"/"sanitário", já
+   que ambos podem coexistir num Nome mal formatado.
+
+Cada rejeição carrega o motivo específico na Observação ("...mas o Nome não
+contém o qualificador obrigatório (X/Y)..." ou "...mas o Nome indica uso
+diferente do previsto ('Z')..."), distinto da mensagem genérica de
+"nenhuma palavra-chave bate" — a analista sabe exatamente qual camada
+rejeitou sem precisar reabrir o anexo original.
+
 **Decisão de política — rejeição vira Tributado normal, não Dúvida.**
 Quando o NCM bate com um item do anexo mas nenhuma palavra-chave da
 Descrição aparece no Nome do produto, a linha **não** vira
@@ -562,6 +588,22 @@ automaticamente um novo deploy.
   ideal; revise a Observação das linhas rejeitadas/confirmadas por essa via
   quando cadastrar um anexo com descrições muito diferentes dos exemplos já
   testados (bebidas, panificação).
+- Os campos `qualificadoresObrigatorios`/`exclusoesPorPalavra` (qualificador
+  obrigatório e exclusão por palavra) só existem na **tabela curada**
+  (`PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO`) — a extração automática (para
+  descrições não cobertas pela tabela curada) ainda não suporta essas duas
+  camadas. Um NCM de uso duplo (ex.: um NCM cosmético/medicinal novo, fora
+  dos já cadastrados) cai no comportamento de palavra-chave simples até
+  ganhar uma entrada curada dedicada. Além disso, o gatilho da tabela curada
+  (`gatilhosDescricao`) é comparado contra a Descrição de **qualquer** linha
+  de anexo cujo NCM já bateu com o produto, sem restringir a qual NCM a
+  entrada curada foi pensada para — uma Descrição de um NCM totalmente
+  diferente que coincidentemente contenha o mesmo trecho (ex.: "algodão"
+  aparecendo dentro de uma descrição de óleo de algodão) pode, em teoria,
+  acionar a entrada errada. Não é um problema observado na prática (os
+  gatilhos usados são termos específicos do domínio), mas é uma limitação
+  arquitetural a ter em mente ao cadastrar entradas curadas novas com
+  gatilhos muito genéricos.
 - **Decisão de política**: quando o NCM bate com um item do anexo de ST (ou
   com uma sobrescrita de `NCM_OVERRIDES`/benefício de ICMS-BA que exige
   palavra-chave) mas o Nome do produto não confirma, a linha **não** vira

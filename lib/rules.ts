@@ -396,13 +396,21 @@ export function classificarProdutoCliente(
     } else if (decisaoAnexo.tipo === "rejeitado") {
       // Registrado sempre (não só quando muda a categoria) — a analista precisa saber
       // que o NCM apareceu num item do anexo mesmo quando o resultado final já seria
-      // Tributado de qualquer forma, para poder auditar a rejeição depois.
-      pendencias.push({
-        peso: 0,
-        mensagem:
-          `NCM ${ncmDigitos} consta no anexo (item: "${decisaoAnexo.item.descricao}"), mas a descrição do ` +
-          `produto não confirma - classificado como Tributado normal.`,
-      });
+      // Tributado de qualquer forma, para poder auditar a rejeição depois. O motivo
+      // exato (qualificador obrigatório ausente, exclusão por uso alternativo, ou
+      // simplesmente nenhuma palavra-chave bateu) muda o texto da Observação.
+      const itemTexto = `item: "${decisaoAnexo.item.descricao}"`;
+      const motivo = decisaoAnexo.motivoRejeicao;
+      const mensagemRejeicao =
+        motivo.tipo === "qualificador_ausente"
+          ? `NCM ${ncmDigitos} consta no anexo (${itemTexto}), mas o Nome não contém o qualificador obrigatório ` +
+            `(${motivo.qualificadores.join("/")}) - classificado como Tributado normal.`
+          : motivo.tipo === "exclusao"
+            ? `NCM ${ncmDigitos} consta no anexo (${itemTexto}), mas o Nome indica uso diferente do previsto ` +
+              `("${motivo.palavraExcluida}") - classificado como Tributado normal.`
+            : `NCM ${ncmDigitos} consta no anexo (${itemTexto}), mas a descrição do produto não confirma - ` +
+              `classificado como Tributado normal.`;
+      pendencias.push({ peso: 0, mensagem: mensagemRejeicao });
       categoria = "tributado";
     } else if (categoria === "st") {
       pendencias.push({

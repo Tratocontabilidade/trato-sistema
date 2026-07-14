@@ -825,6 +825,24 @@ export interface RegraPalavraChaveAnexo {
    * palavra-chave extra necessária), ex.: "sorvetes de qualquer espécie".
    */
   gruposPalavraChaveProduto: string[][];
+  /**
+   * Checado ANTES de `gruposPalavraChaveProduto` — pelo menos uma destas
+   * precisa aparecer no Nome do produto, ou o casamento é rejeitado
+   * (Tributado normal) sem sequer avaliar os grupos abaixo. Usado quando a
+   * Descrição do anexo é altamente específica e o NCM sozinho cobre
+   * produtos claramente diferentes (ex.: "misturas/preparações PARA PÃES"
+   * não cobre misturas para bolo, mesmo com o mesmo NCM 1901.20).
+   */
+  qualificadoresObrigatorios?: string[];
+  /**
+   * Checado depois do qualificador obrigatório (ou logo de cara, se não
+   * houver um) — se QUALQUER uma destas aparecer no Nome do produto, o
+   * casamento é rejeitado (Tributado normal), mesmo que o resto bata. Usado
+   * para excluir um uso alternativo do mesmo NCM (ex.: algodão cosmético —
+   * remoção de maquiagem/esmalte — dentro do mesmo NCM 3005 de algodão/
+   * curativo medicinal).
+   */
+  exclusoesPorPalavra?: string[];
 }
 
 export const PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO: RegraPalavraChaveAnexo[] = [
@@ -855,6 +873,36 @@ export const PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO: RegraPalavraChaveAnexo[] = [
     // "Bebidas hidroeletrolíticas".
     gatilhosDescricao: ["hidroeletrolitica", "hidroeletrolitico", "isotonico", "isotonica"],
     gruposPalavraChaveProduto: [["hidroeletrolitica", "hidroeletrolitico", "isotonico", "isotonica", "gatorade"]],
+  },
+  {
+    // "Misturas/preparações PARA PÃES" (NCM 1901.20, ≥80% de farinha de trigo) — o mesmo
+    // NCM também cobre mistura para bolo, pão de queijo (farinha de mandioca/polvilho) e
+    // mistura para biscoito/torta, que NÃO são o produto descrito no anexo. O qualificador
+    // exige "pão"/"pães" no Nome; a exclusão descarta mesmo quando "pão" aparece junto de
+    // outra categoria (ex.: "pão de queijo" tem "pão" mas é queijo, não pão de trigo).
+    gatilhosDescricao: ["para pao", "para paes", "preparacao de produtos de padaria", "preparacoes de produtos de padaria"],
+    gruposPalavraChaveProduto: [],
+    qualificadoresObrigatorios: ["pao", "paes"],
+    exclusoesPorPalavra: ["bolo", "biscoito", "torta", "queijo", "milho", "mandioca", "arroz"],
+  },
+  {
+    // "Álcool etílico hidratado combustível" (NCM 2207.10.9, ≥80% vol., não desnaturado) —
+    // o mesmo NCM cobre álcool doméstico/farmácia (limpeza, antissséptico), que não é ST.
+    gatilhosDescricao: ["alcool etilico hidratado combustivel", "alcool combustivel", "hidratado combustivel"],
+    gruposPalavraChaveProduto: [],
+    qualificadoresObrigatorios: ["combustivel", "carro", "veiculo"],
+    exclusoesPorPalavra: ["limpeza", "domestico", "gel higienizante", "70", "liquido", "sanitario"],
+  },
+  {
+    // "Algodão, atadura, esparadrapo, gazes, pensos, sinapismos" (NCM 3005, seção de
+    // medicamentos/curativos) — o mesmo NCM também cobre algodão de uso cosmético (remoção
+    // de maquiagem/esmalte), vendido no mesmo corredor de supermercado. Sem qualificador
+    // obrigatório (o padrão é ST — uso medicinal — a menos que o Nome indique cosmético);
+    // "hidrófilo"/"estéril"/"primeiros socorros" no Nome reforçam a confirmação, mas não
+    // são exigidos.
+    gatilhosDescricao: ["algodao", "atadura", "esparadrapo", "gaze", "penso", "sinapismo"],
+    gruposPalavraChaveProduto: [],
+    exclusoesPorPalavra: ["maquiagem", "maquilagem", "demaquilante", "disco", "esmalte", "unha", "cosmetic", "beleza", "removedor"],
   },
 ];
 
