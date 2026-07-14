@@ -220,26 +220,32 @@ teste("NCM 22030000 'SKOL LATA 350ML' -> ST (2203 é específico o bastante, cas
   assert.equal(r.cstIcms, "060");
 });
 
-teste("NCM em família ampla sem descrição reconhecida e Nome vazio -> Dúvida (nunca ST no escuro)", () => {
-  const anexoAmbiguo = anexoComDescricao("ST-BA hipotético", [["21069", "Outras preparações alimentícias diversas"]]);
-  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoAmbiguo] };
+teste("NCM em família ampla, descrição extrai palavra-chave e Nome vazio -> rejeitado, Tributado normal (não Dúvida)", () => {
+  // Decisão de política: nome vazio não confirma nenhuma palavra-chave, mas
+  // isso não é mais Dúvida — vira Tributado normal, com a rejeição citada na
+  // Observação para a analista auditar depois (ver lib/rules.ts).
+  const anexoAmplo = anexoComDescricao("ST-BA hipotético", [["21069", "Outras preparações alimentícias diversas"]]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoAmplo] };
   const r = classificarProdutoCliente(
     produto({ nome: "", ncm: "21069010", ncmOriginal: "21069010", tributacao: "Tributado" }),
     contexto
   );
-  assert.equal(r.status, "Dúvida — aguardando instrução");
-  assert.equal(r.cfopSaidas, "");
+  assert.notEqual(r.status, "Dúvida — aguardando instrução");
+  assert.equal(r.cfopSaidas, "5102");
+  assert.equal(r.cstIcms, "000");
+  assert.ok(r.observacao.includes("não confirma"), r.observacao);
 });
 
-teste("NCM em família ampla com descrição NÃO mapeada -> Dúvida em vez de assumir ST (prefixo curto)", () => {
-  const anexoAmbiguo = anexoComDescricao("ST-BA hipotético", [["21069", "Outras preparações alimentícias diversas"]]);
-  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoAmbiguo] };
+teste("NCM em família ampla com descrição extraída que não bate no Nome -> rejeitado, Tributado normal (não Dúvida)", () => {
+  const anexoAmplo = anexoComDescricao("ST-BA hipotético", [["21069", "Outras preparações alimentícias diversas"]]);
+  const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoAmplo] };
   const r = classificarProdutoCliente(
     produto({ nome: "CHÁ MATTE LEÃO SACHÊ", ncm: "21069010", ncmOriginal: "21069010", tributacao: "Tributado" }),
     contexto
   );
-  assert.equal(r.status, "Dúvida — aguardando instrução");
-  assert.equal(r.cfopSaidas, "");
+  assert.notEqual(r.status, "Dúvida — aguardando instrução");
+  assert.equal(r.cfopSaidas, "5102");
+  assert.equal(r.cstIcms, "000");
 });
 
 teste("Anexo temporário (upload na tela de instruções) recebe o mesmo refinamento por palavra-chave", () => {
@@ -922,7 +928,9 @@ teste("NCM 0703 truncado (4 dígitos, sem saber se é alho) -> Dúvida, nunca pr
   assert.equal(r.status, "Dúvida — aguardando instrução");
 });
 
-teste("Hortifrúti fresco com nome indicando produto industrializado (mesmo caindo no NCM 07/08) -> Dúvida", () => {
+teste("Hortifrúti fresco com nome indicando produto industrializado (mesmo caindo no NCM 07/08) -> CST 000, não Dúvida", () => {
+  // Decisão de política: a isenção não é confirmada, mas isso não é mais Dúvida —
+  // vira CST ICMS 000 automaticamente, com a rejeição citada na Observação.
   const r = classificarProdutoCliente(
     produto({
       nome: "MILHO VERDE EM CONSERVA 200G",
@@ -932,7 +940,9 @@ teste("Hortifrúti fresco com nome indicando produto industrializado (mesmo cain
     }),
     contextoPadrao
   );
-  assert.equal(r.status, "Dúvida — aguardando instrução");
+  assert.notEqual(r.status, "Dúvida — aguardando instrução");
+  assert.equal(r.cstIcms, "000");
+  assert.ok(r.observacao.includes("industrializado"), r.observacao);
 });
 
 teste("Benefício de ICMS-BA nunca se aplica quando o produto é ST (anexo vence)", () => {
@@ -975,6 +985,132 @@ teste("Leite de cabra (Art. 265 I h) tem prioridade sobre a regra geral de leite
   );
   assert.equal(r.cstIcms, "040");
   assert.ok(r.observacao.includes("I 'h'"), r.observacao);
+});
+
+console.log(
+  "\n=== Bloco 9 — extração automática de palavras-chave do anexo (pão/bolo/pizza, NCM 19059090) + cClassTrib por categoria ==="
+);
+
+// Cenário real que motivou a mudança: NCM 19059090 aparece no anexo em dois itens
+// (pão e bolo/panificação/pizza) sem estar em PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO (a
+// tabela curada) — a extração automática de palavras-chave precisa dar conta sozinha.
+function anexoStBaPanificacao(): AnexoEmpresa {
+  return anexoComDescricao("ST-BA 2026 — panificação", [
+    ["19059090", "Outros pães"],
+    ["19059090", "Outros bolos industrializados e produtos de panificação, inclusive pizzas"],
+  ]);
+}
+
+const casosNaoStPanificacao = ["BATATA PRINGLES ORIGINAL 120G", "BACONZITOS ELMA 45G", "BATATA LAY'S CLÁSSICA 96G"];
+for (const nome of casosNaoStPanificacao) {
+  teste(`NCM 19059090 '${nome}' -> CFOP 5102, NÃO ST, cclasstrib 000001 (não é pão/bolo/pizza)`, () => {
+    const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaPanificacao()] };
+    const r = classificarProdutoCliente(
+      produto({ nome, ncm: "19059090", ncmOriginal: "19059090", tributacao: "Tributado" }),
+      contexto
+    );
+    assert.equal(r.cfopSaidas, "5102", `${nome}: veio ${r.cfopSaidas}`);
+    assert.equal(r.cstIcms, "000", `${nome}: veio ${r.cstIcms}`);
+    assert.equal(r.cclasstrib, "000001", `${nome}: veio ${r.cclasstrib}`);
+    assert.notEqual(r.status, "Dúvida — aguardando instrução", `${nome}: veio Dúvida`);
+    assert.ok(r.observacao.includes("não confirma"), `${nome}: ${r.observacao}`);
+  });
+}
+
+const casosStPanificacao: { nome: string; cclasstribEsperado?: string }[] = [
+  { nome: "PÃO DE FORMA WICKBOLD 500G", cclasstribEsperado: "200003" },
+  { nome: "PÃO FRANCÊS 50G", cclasstribEsperado: "200003" },
+  { nome: "BOLO DE CHOCOLATE ANA MARIA 250G", cclasstribEsperado: "200003" },
+  { nome: "PIZZA CONGELADA SADIA MUSSARELA" }, // ST confirmado, mas pizza não é cesta básica (LC 214/2025)
+];
+for (const { nome, cclasstribEsperado } of casosStPanificacao) {
+  teste(`NCM 19059090 '${nome}' -> ST (CFOP 5405, CST 060)${cclasstribEsperado ? `, cclasstrib ${cclasstribEsperado}` : ""}`, () => {
+    const contexto: ContextoClassificacao = { ...contextoPadrao, anexosAtivos: [anexoStBaPanificacao()] };
+    const r = classificarProdutoCliente(
+      produto({ nome, ncm: "19059090", ncmOriginal: "19059090", tributacao: "Tributado" }),
+      contexto
+    );
+    assert.equal(r.cfopSaidas, "5405", `${nome}: veio ${r.cfopSaidas}`);
+    assert.equal(r.cstIcms, "060", `${nome}: veio ${r.cstIcms}`);
+    if (cclasstribEsperado) assert.equal(r.cclasstrib, cclasstribEsperado, `${nome}: veio ${r.cclasstrib}`);
+  });
+}
+
+teste("MARGARINA QUALY 500G (NCM 15171000) -> CST ICMS 000 (não é óleo de soja, prefixo nem bate)", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "MARGARINA QUALY 500G", ncm: "15171000", ncmOriginal: "15171000", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.cstIcms, "000");
+});
+
+teste("Óleo de algodão confirmado por Nome (NCM 15122910) -> CST ICMS 020", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "OLEO DE ALGODAO REFINADO 900ML", ncm: "15122910", ncmOriginal: "15122910", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.cstIcms, "020");
+});
+
+teste("Óleo composto sem confirmar soja nem algodão pelo Nome (NCM 15079019) -> CST ICMS 000, rejeição na Observação", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "OLEO COMPOSTO PREMIUM 900ML", ncm: "15079019", ncmOriginal: "15079019", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.cstIcms, "000");
+  assert.notEqual(r.status, "Dúvida — aguardando instrução");
+  assert.ok(r.observacao.includes("não confirma"), r.observacao);
+});
+
+teste("cClassTrib de arroz/feijão (NCM 10063021) rejeitado quando o Nome não confirma -> 000001, não Dúvida", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "CEREAL MATINAL INTEGRAL 300G", ncm: "10063021", ncmOriginal: "10063021", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.notEqual(r.status, "Dúvida — aguardando instrução");
+  assert.equal(r.cclasstrib, "000001");
+  assert.ok(r.observacao.includes("cClassTrib"), r.observacao);
+});
+
+teste("cClassTrib de arroz confirmado pelo Nome (NCM 10063021) -> 200003", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "ARROZ TIO JOÃO 5KG", ncm: "10063021", ncmOriginal: "10063021", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.cclasstrib, "200003");
+});
+
+teste("cClassTrib de carnes rejeitado para embutido de nome atípico (NCM 02071200) -> 000001, não Dúvida", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "PRODUTO CONGELADO SABOR ORIENTAL 400G", ncm: "02071200", ncmOriginal: "02071200", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.notEqual(r.status, "Dúvida — aguardando instrução");
+  assert.equal(r.cclasstrib, "000001");
+});
+
+teste("cClassTrib de carnes confirmado pelo Nome (NCM 02071200, frango) -> 200003", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "Frango inteiro congelado kg", ncm: "02071200", ncmOriginal: "02071200", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.cclasstrib, "200003");
+});
+
+teste("cClassTrib de leite rejeitado para produto sem 'leite' no Nome (NCM 04012010) -> 000001", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "BEBIDA LACTEA SABOR MORANGO 1L", ncm: "04012010", ncmOriginal: "04012010", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.cclasstrib, "000001");
+});
+
+teste("cClassTrib de leite confirmado pelo Nome (NCM 04012010) -> 200003", () => {
+  const r = classificarProdutoCliente(
+    produto({ nome: "LEITE INTEGRAL ITAMBÉ 1L", ncm: "04012010", ncmOriginal: "04012010", tributacao: "Tributado" }),
+    contextoPadrao
+  );
+  assert.equal(r.cclasstrib, "200003");
 });
 
 console.log(`\n${passou} passaram, ${falhou} falharam.\n`);

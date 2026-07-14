@@ -5,7 +5,7 @@
 
 import * as XLSX from "xlsx";
 import type { AnexoColunas, AnexoEmpresa, LinhaAnexo } from "./empresas";
-import { buscarRegraPalavraChaveAnexo } from "./tables";
+import { buscarRegraPalavraChaveAnexo, extrairPalavrasChaveDescricao, nomeContemPalavraChave } from "./tables";
 
 const REGEX_DIACRITICOS = /[\u0300-\u036f]/g;
 
@@ -83,62 +83,84 @@ export function parsearAnexo(linhas: LinhaBruta[], colunas: AnexoColunas): Linha
   return resultado;
 }
 
+/** Item do anexo que decidiu (ou quase decidiu) o resultado — usado para compor a Observação da linha. */
+export interface ItemAnexoDecisao {
+  ncm: string;
+  descricao?: string;
+}
+
 /**
- * Resultado do casamento de um produto contra os anexos ativos:
+ * Decisão do casamento de um produto contra os anexos ativos:
  * - "st": achou uma linha de anexo cujo NCM/descrição casa com o produto → é ST.
- * - "nao_st": nenhuma linha de anexo casa (nem por prefixo nem por palavra-chave) → não é ST.
- * - "ambiguo": o NCM cai num prefixo amplo de um anexo, mas não há como confirmar
- *   pelo Nome do produto (ou a linha do anexo é ambígua por natureza) — dúvida.
+ *   `item` identifica a linha; `motivoSt` diz se foi por palavra-chave confirmada
+ *   no Nome ou porque a linha não tinha descrição útil pra checar (casamento
+ *   direto por NCM, comportamento histórico).
+ * - "rejeitado": o NCM bateu com uma linha do anexo, mas nenhuma palavra-chave da
+ *   Descrição apareceu no Nome do produto — decisão de política: NÃO é mais
+ *   Dúvida, é tratado como Tributado normal, com `item` citado na Observação
+ *   para a analista auditar depois (ver lib/rules.ts).
+ * - "nao_st": nenhuma linha de nenhum anexo ativo bate com o NCM.
  */
-export type ResultadoAnexo = "st" | "nao_st" | "ambiguo";
+export type DecisaoAnexo =
+  | { tipo: "st"; motivoSt: "palavra_chave" | "sem_descricao_util"; item: ItemAnexoDecisao }
+  | { tipo: "rejeitado"; item: ItemAnexoDecisao }
+  | { tipo: "nao_st" };
 
 /**
  * Verifica se um NCM consta em algum anexo ativo da empresa (usado para decidir ST no
- * Bloco 3). NCMs de família ampla (ex.: "2106.9") não bastam sozinhos — quando a
- * descrição da linha do anexo bate com uma entrada conhecida em
- * `PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO` (lib/tables.ts), o Nome do produto precisa
- * conter as palavras-chave exigidas para confirmar o casamento, não importa quantos
- * dígitos o prefixo do anexo tenha (ex.: o item de xarope pré-mix do ST-BA já vem
- * com 7 dígitos, mas ainda cobre só uma fração dos produtos que compartilham esse
- * prefixo).
+ * Bloco 3) e, quando a linha do anexo tem uma Descrição, exige que o Nome do produto
+ * confirme a categoria — NCMs de família ampla (ex.: "1905.90.90") cobrem produtos bem
+ * diferentes entre si (pão vs. batata chips), e casar só por prefixo captura os dois.
  *
- * Quando a linha do anexo NÃO tem mapeamento conhecido, o critério é:
- * - Sem descrição alguma (só o código do NCM, como listas de categoria costumam
- *   trazer) → mantém o comportamento histórico: casa direto pelo prefixo, mesmo
- *   curto. Não há texto nenhum para desconfiar, então a lista é o que manda.
- * - Com descrição, mas não reconhecida, e prefixo com menos de 6 dígitos → não dá
- *   pra saber se ela cobre a família toda ou só uma fração — vira "ambiguo"
- *   (dúvida) em vez de assumir ST por conta própria.
- * - Prefixo com 6+ dígitos é tratado como específico o bastante para casar direto,
- *   com ou sem descrição.
+ * Duas fontes de palavras-chave, nessa ordem:
+ * 1. `PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO` (lib/tables.ts) — tabela curada com sinônimos
+ *    de marca já validados em ciclos anteriores (ex.: "energy"/"gatorade" para bebidas
+ *    energéticas/hidroeletrolíticas, já que o Nome real do produto raramente usa o
+ *    termo genérico da lei). Quando bate, manda — inclusive o caso de grupo vazio
+ *    (ex.: sorvete, onde a categoria inteira do NCM já é isso, sem exigir palavra
+ *    nenhuma no Nome).
+ * 2. Extração automática (`extrairPalavrasChaveDescricao`) — para qualquer outra
+ *    Descrição não coberta pela tabela curada (ex.: "Outros pães", "Outros bolos... e
+ *    pizzas"). Quando a extração não encontra nenhuma palavra-chave útil (Descrição
+ *    vazia ou só com conectivos genéricos), mantém o comportamento histórico: casa
+ *    direto por NCM, sem exigir confirmação.
+ *
+ * Continua varrendo as demais linhas mesmo depois de uma rejeição — um mesmo NCM pode
+ * aparecer em mais de um item do anexo (ex.: "Outros pães" e "Outros bolos... pizzas"
+ * no mesmo NCM 1905.90.90); só decide "rejeitado" se NENHUMA linha confirmar.
  */
-export function buscarNoAnexo(
-  ncmDigitos: string,
-  nomeNormalizado: string,
-  anexosAtivos: AnexoEmpresa[]
-): ResultadoAnexo {
-  if (!ncmDigitos) return "nao_st";
-  let algumAmbiguo = false;
+export function buscarNoAnexo(ncmDigitos: string, nomeNormalizado: string, anexosAtivos: AnexoEmpresa[]): DecisaoAnexo {
+  if (!ncmDigitos) return { tipo: "nao_st" };
+  let candidatoRejeitado: ItemAnexoDecisao | undefined;
+
   for (const anexo of anexosAtivos) {
     for (const linha of anexo.linhas) {
       if (!ncmDigitos.startsWith(linha.ncm)) continue;
-      const regra = buscarRegraPalavraChaveAnexo(linha.descricao);
-      if (regra) {
-        if (regra.gruposPalavraChaveProduto.length === 0) return "st";
-        if (!nomeNormalizado) {
-          algumAmbiguo = true;
-          continue;
+      const item: ItemAnexoDecisao = { ncm: linha.ncm, descricao: linha.descricao };
+
+      const regraCurada = buscarRegraPalavraChaveAnexo(linha.descricao);
+      if (regraCurada) {
+        if (regraCurada.gruposPalavraChaveProduto.length === 0) {
+          return { tipo: "st", motivoSt: "palavra_chave", item };
         }
-        const bateTodosOsGrupos = regra.gruposPalavraChaveProduto.every((grupo) =>
-          grupo.some((k) => nomeNormalizado.includes(k))
-        );
-        if (bateTodosOsGrupos) return "st";
+        const bateTodosOsGrupos =
+          Boolean(nomeNormalizado) &&
+          regraCurada.gruposPalavraChaveProduto.every((grupo) => grupo.some((k) => nomeNormalizado.includes(k)));
+        if (bateTodosOsGrupos) return { tipo: "st", motivoSt: "palavra_chave", item };
+        if (!candidatoRejeitado) candidatoRejeitado = item;
         continue;
       }
-      const temDescricao = Boolean(linha.descricao && linha.descricao.trim());
-      if (linha.ncm.length >= 6 || !temDescricao) return "st";
-      algumAmbiguo = true;
+
+      const palavrasChave = extrairPalavrasChaveDescricao(linha.descricao);
+      if (palavrasChave.length === 0) {
+        return { tipo: "st", motivoSt: "sem_descricao_util", item };
+      }
+      if (nomeContemPalavraChave(nomeNormalizado, palavrasChave)) {
+        return { tipo: "st", motivoSt: "palavra_chave", item };
+      }
+      if (!candidatoRejeitado) candidatoRejeitado = item;
     }
   }
-  return algumAmbiguo ? "ambiguo" : "nao_st";
+
+  return candidatoRejeitado ? { tipo: "rejeitado", item: candidatoRejeitado } : { tipo: "nao_st" };
 }
