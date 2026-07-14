@@ -19,10 +19,16 @@ planilha com os campos preenchidos ou validados, com memória por empresa:
   básica, monofásicos, reduções específicas de supermercado).
 - Linhas que o cliente já enviou classificadas **não são sobrescritas** —
   apenas validadas (formato do código, coerência com o padrão esperado).
-- **Regra de ouro**: qualquer ambiguidade (segmento excluído por instrução,
-  NCM sabidamente ambíguo, Tributação não reconhecida) nunca é "chutada" —
-  vira Status `Dúvida — aguardando instrução`, com Observação explicando o
-  motivo.
+- **Regra de ouro**: qualquer ambiguidade sem nenhum padrão conservador
+  seguro (segmento excluído por instrução, NCM sabidamente ambíguo,
+  Tributação não reconhecida, NCM com dígitos insuficientes) nunca é
+  "chutada" — vira Status `Dúvida — aguardando instrução`, com Observação
+  explicando o motivo. Quando existe um padrão conservador claro (o NCM
+  bate com um item de ST/redução/isenção, mas o Nome do produto não
+  confirma a categoria), a linha é classificada automaticamente como
+  Tributado normal em vez de Dúvida — decisão de política para acelerar a
+  revisão, sempre citando a rejeição na Observação (ver "Empresas,
+  instruções e anexos de ST" abaixo).
 - **Histórico** por empresa (data, arquivo, instruções aplicadas, anexos
   ativos, contadores) e **aprendizado com correção**: compare um
   processamento anterior com a planilha que você corrigiu manualmente e
@@ -160,7 +166,15 @@ parcial.
 - Sobrescritas de IBS/CBS por NCM (`lib/tables.ts`, tabela `NCM_OVERRIDES`)
   têm prioridade sobre o padrão de Tributação para os campos que definem,
   exceto quando um anexo de ST ativo da empresa ou uma regra aprendida dizem
-  o contrário (ver ordem de prioridade acima).
+  o contrário (ver ordem de prioridade acima). Categorias em que o NCM
+  sozinho cobre produtos claramente diferentes (arroz/feijão, leite, pão/
+  panificação, carnes — ex.: NCM 1905.90.90 cobre tanto pão quanto batata
+  chips) exigem confirmação por palavra-chave no Nome
+  (`palavrasChaveExigidas` na entrada da tabela). Quando o NCM bate mas o
+  Nome não confirma, o cClassTrib **não** vira Dúvida — cai em
+  **000001 (tributação integral)** automaticamente, citando a rejeição na
+  Observação (mesma decisão de política do casamento com anexos de ST,
+  abaixo).
 - **CST PIS/COFINS, PIS, COFINS e NAT. RECEITA** são resolvidos por
   `lib/regras-federais.ts` (monofásico, alíquota zero ou substituição
   tributária federal por NCM, com desempate por palavra-chave no Nome
@@ -225,7 +239,7 @@ ciclo futuro. Sobrescreve o CST ICMS 000 padrão quando o produto não é ST
 | Regime | CST | Categorias | Base legal |
 | --- | --- | --- | --- |
 | Isenção | 040 | Hortifrutícolas frescos (cap. 07/08, exceto alho e castanhas/nozes/amêndoas/avelãs), leite pasteurizado tipo A/B ou magro (não o UHT), leite de cabra, farinha de mandioca, arroz, feijão, sal, fubá/farinha de milho, ovos, polpa de cacau | Art. 265, incisos I e II, do RICMS-BA (Decreto nº 13.780/2012) |
-| Redução de BC (carga 12%) | 020 | Óleo refinado de soja/algodão, peixes e carnes de peixe | Art. 268, XXII e LXIX, do RICMS-BA |
+| Redução de BC (carga 12%) | 020 | Óleo refinado de soja, óleo refinado de algodão, peixes e carnes de peixe | Art. 268, XXII e LXIX, do RICMS-BA |
 | Alíquota reduzida 7% | 000 (nota na Observação) | Macarrão (NCM 1902) | Art. 16, I "a", da Lei nº 7.014/96 |
 
 **Princípio de interpretação**: quando a Lei nº 7.014/96 previa alíquota
@@ -234,23 +248,36 @@ previu isenção para o mesmo produto, prevalece a **isenção** — por isso o
 Art. 265 é sempre consultado primeiro; só o macarrão manteve a alíquota
 residual de 7% (nunca migrou para isenção).
 
-Casos que exigem cuidado extra, sempre documentados em comentário no código:
+Casos que exigem confirmação por palavra-chave no Nome — quando o NCM bate
+mas a confirmação falha, **não** vira Dúvida: cai em **CST ICMS 000**
+automaticamente, citando a rejeição na Observação (mesma decisão de
+política do casamento com anexos de ST, acima):
 
+- **Arroz/feijão (NCM 1006, 0713.31-35)**: exige "arroz" ou "feijão" no
+  Nome. Sem confirmação, CST 000.
+- **Óleo de soja (NCM 1507.90)**: exige "óleo" **e** "soja" no Nome. Óleo
+  de algodão (NCM 1512.29) exige "óleo" **e** "algodão" — são checados
+  separadamente, um não confirma o outro.
 - **Leite (NCM 0401.20)**: o mesmo NCM cobre pasteurizado (isento) e UHT/
   longa vida (não isento) — só o Nome distingue ("pasteurizado"/"tipo A"/
   "tipo B"/"magro" → isento; "UHT"/"longa vida" → não isento). Sem nenhum
-  dos dois sinais no Nome, vira Dúvida.
+  dos dois sinais no Nome, CST 000 (não presume isenção).
+- Se o Nome de um produto do capítulo 07/08 sugerir industrialização
+  ("conserva", "seco", "desidratado", "enlatado", "em calda",
+  "cristalizado"), CST 000 em vez da isenção — o NCM (fresco) e o Nome
+  (processado) estão em conflito, e o padrão conservador vence.
+
+Casos que continuam sendo genuína Dúvida — faltam **dígitos do NCM**, não
+uma confirmação de Nome, então não há um padrão conservador seguro para
+aplicar automaticamente:
+
 - **Alho (dentro de 0703)**: cebola, alho-poró e outros produtos da mesma
   posição são isentos, mas alho é exceção expressa — precisa dos 6 dígitos
-  do NCM para diferenciar; um NCM truncado em "0703" vira Dúvida.
+  do NCM para diferenciar; um NCM truncado em "0703" vira Dúvida (não dá
+  pra saber se o CST correto é 040 ou 000 sem o subitem completo).
 - **Castanhas, nozes, amêndoas e avelãs (posições 0801/0802 inteiras)**:
   exceção expressa da isenção de frutas frescas — nunca isentas por essa
   regra, mesmo com NCM na faixa de frutas.
-- Se o Nome de um produto do capítulo 07/08 sugerir industrialização
-  ("conserva", "seco", "desidratado", "enlatado", "em calda",
-  "cristalizado"), a linha vira Dúvida em vez de aplicar a isenção — o
-  conflito entre NCM (fresco) e Nome (processado) precisa de confirmação
-  humana.
 - Assim como CFOP SAIDAS, **CST ICMS nunca aceita regra aprendida** — nem
   mesmo para "corrigir" um benefício fiscal. Se um benefício estiver saindo
   errado, revise a tabela `avaliarBeneficioIcmsBa` em `lib/tables.ts`, não o
@@ -308,28 +335,55 @@ decidir e vira Dúvida.
 
 **Refinamento por palavra-chave para NCMs de família ampla.** Casar só por
 prefixo não basta quando o anexo lista um NCM amplo que cobre produtos bem
-diferentes entre si — o exemplo real é o NCM 2106.90.1x ("outras
-preparações alimentícias não especificadas"), que no ST-BA cobre itens tão
-distintos quanto bebidas energéticas, xarope pré-mix, bebidas
-hidroeletrolíticas — mas também achocolatados, sucos em pó e chás em pó que
-**não** são ST. Casar por `startsWith` sozinho varreria esses últimos para
-dentro da ST por engano. Para evitar isso, `lib/tables.ts` tem uma tabela
-`PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO` que mapeia trechos da **Descrição** de
-uma linha do anexo (ex.: "Bebidas energéticas em lata") para as
-palavras-chave que precisam aparecer no **Nome** do produto para confirmar
-o casamento (ex.: "energética"/"energético"/"energy"). Quando a descrição
-da linha bate com uma entrada mapeada, essa entrada manda — não importa
-quantos dígitos o prefixo do NCM tenha. Quando não bate com nenhuma
-entrada mapeada, o critério de reserva é: sem nenhuma descrição no anexo
-(só o código do NCM), mantém o comportamento histórico de casar direto pelo
-prefixo; com uma descrição não reconhecida e um prefixo de menos de 6
-dígitos, não dá pra confiar que ela cobre a família inteira, então vira
-`Dúvida — aguardando instrução` em vez de assumir ST às cegas (regra de
-ouro). Isso vale igualmente para anexos salvos na empresa e para o anexo
-temporário da tela de Instruções — os dois passam pelo mesmo
-`buscarNoAnexo` em `lib/anexos.ts`. Sorvete (NCM 2105) é a exceção: como o
-capítulo inteiro é sorvete, a entrada mapeada não exige palavra-chave
-nenhuma no Nome.
+diferentes entre si — dois exemplos reais: o NCM 2106.90.1x ("outras
+preparações alimentícias não especificadas") cobre tanto bebidas
+energéticas/xarope pré-mix/hidroeletrolíticas (ST) quanto achocolatados,
+sucos em pó e chás em pó (não-ST); o NCM 1905.90.90 cobre tanto pão/bolo/
+pizza (ST, segundo itens típicos do ST-BA) quanto batata chips e
+salgadinhos de pacote (não-ST). Casar por `startsWith` sozinho varreria os
+segundos para dentro da ST por engano. `lib/anexos.ts:buscarNoAnexo`
+resolve isso em duas camadas:
+
+1. **Tabela curada** (`PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO` em
+   `lib/tables.ts`) — mapeia trechos da Descrição para grupos de
+   palavras-chave já validados em ciclos anteriores, incluindo sinônimos de
+   marca que o Nome real do produto usa em vez do termo genérico da lei
+   (ex.: "energy"/"gatorade" em vez de "energética"/"hidroeletrolítica").
+   Sorvete (NCM 2105) é o único caso sem palavra-chave exigida — o capítulo
+   inteiro é sorvete, então a entrada mapeada casa direto.
+2. **Extração automática** (`extrairPalavrasChaveDescricao`, também em
+   `lib/tables.ts`) — para qualquer Descrição não coberta pela tabela
+   curada (ex.: "Outros pães", "Outros bolos... e pizzas"), extrai os
+   substantivos de categoria do texto (ignorando conectivos, qualificadores
+   genéricos como "outros"/"industrializado" e embalagens como "lata"/
+   "pet"/"vidro") e casa por token inteiro contra o Nome do produto — nunca
+   por substring solta, para uma palavra curta como "pão" não colidir com
+   um trecho de outra palavra maior (ex.: "presunto"). Quando a extração não
+   encontra nenhuma palavra-chave útil (Descrição vazia ou só conectivos),
+   mantém o comportamento histórico: casa direto pelo NCM.
+
+Continua varrendo as demais linhas do anexo mesmo depois de uma rejeição —
+um mesmo NCM pode aparecer em mais de um item (ex.: "Outros pães" e "Outros
+bolos... pizzas" no mesmo NCM 1905.90.90); só rejeita se **nenhuma** linha
+confirmar. Isso vale igualmente para anexos salvos na empresa e para o
+anexo temporário da tela de Instruções — os dois passam pela mesma função.
+
+**Decisão de política — rejeição vira Tributado normal, não Dúvida.**
+Quando o NCM bate com um item do anexo mas nenhuma palavra-chave da
+Descrição aparece no Nome do produto, a linha **não** vira
+`Dúvida — aguardando instrução` — é classificada automaticamente como
+Tributado normal (CFOP 5102, CST ICMS 000), citando o item do anexo
+rejeitado na Observação para a analista auditar depois. Essa é uma mudança
+deliberada (autorizada pela contratante): revisar uma planilha cheia de
+linhas em branco custa mais tempo do que revisar linhas já classificadas
+com uma nota de auditoria — e como o padrão de rejeição é sempre o mais
+conservador (tributação integral, sem redução/ST), o risco fiscal de uma
+rejeição errada é menor do que o de uma ST/redução aplicada errada. A
+regra de ouro clássica (nunca chutar) continua valendo só para os casos em
+que **nem o NCM nem o Nome** permitem qualquer conclusão — NCM vazio sem
+inferência possível, ou NCM com dígitos insuficientes para saber qual
+subitem se aplica (ex.: "0703" truncado, que pode ser cebola isenta ou
+alho não-isento).
 
 No início de cada processamento, a tela **Instruções** também permite subir
 um **anexo de ST só para aquela rodada** (mesma detecção de colunas e
@@ -493,15 +547,33 @@ automaticamente um novo deploy.
   busca de palavras-chave no campo Nome do produto, pois o layout do cliente
   não tem uma coluna dedicada de segmento. É uma aproximação: produtos com
   nomes atípicos podem não ser reconhecidos por um segmento esperado.
-- O refinamento por palavra-chave do casamento com anexos de ST
-  (`PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO` em `lib/tables.ts`) também é
-  heurístico: cobre os padrões de descrição observados no ST-BA real
-  (sorvete, xarope/cápsula de refrigerante, bebidas energéticas,
-  hidroeletrolíticas) e precisa ganhar novas entradas conforme outras
-  famílias amplas de NCM aparecerem em anexos futuros. Uma linha de anexo
-  com prefixo curto (< 6 dígitos) e descrição não reconhecida não é
-  presumida como ST nem como não-ST — vira Dúvida, mesmo que isso gere mais
-  revisão manual do que um casamento por prefixo simples geraria.
+- O refinamento por palavra-chave do casamento com anexos de ST tem duas
+  camadas (ver "Empresas, instruções e anexos de ST" acima): uma tabela
+  curada (`PALAVRAS_CHAVE_POR_DESCRICAO_ANEXO` em `lib/tables.ts`, com
+  sinônimos de marca já validados) e uma extração automática
+  (`extrairPalavrasChaveDescricao`) para qualquer outra Descrição. A
+  extração automática é heurística de verdade: remove conectivos e
+  qualificadores genéricos de uma lista fixa, singulariza plurais regulares
+  (removendo o "s" final) mais uma pequena lista de plurais irregulares do
+  domínio (hoje só "pão"/"pães") — não é um analisador morfológico
+  completo. Uma Descrição com um plural irregular não mapeado, ou um
+  substantivo de categoria fora do que a lista de conectivos/qualificadores
+  espera, pode extrair uma palavra-chave a mais ou a menos do que o
+  ideal; revise a Observação das linhas rejeitadas/confirmadas por essa via
+  quando cadastrar um anexo com descrições muito diferentes dos exemplos já
+  testados (bebidas, panificação).
+- **Decisão de política**: quando o NCM bate com um item do anexo de ST (ou
+  com uma sobrescrita de `NCM_OVERRIDES`/benefício de ICMS-BA que exige
+  palavra-chave) mas o Nome do produto não confirma, a linha **não** vira
+  Dúvida — é classificada automaticamente como Tributado normal (ou
+  cClassTrib 000001 / CST ICMS 000, conforme o caso), citando a rejeição na
+  Observação. Essa é uma troca deliberada de recall por velocidade de
+  revisão: um produto que deveria ser ST/isento mas tem o Nome atípico
+  (ex.: uma marca que não usa a palavra genérica da lei) vai sair
+  classificado como Tributado normal em vez de aparecer sinalizado à parte
+  — a auditoria depende inteiramente de reler a Observação de cada linha
+  "Preenchido automaticamente", não existe mais uma lista separada de
+  "pendências" para esses casos.
 - Anexos de ST e histórico de processamentos ficam em `localStorage`, que tem
   capacidade finita (tipicamente alguns MB por origem). O histórico mantém só
   as 20 execuções mais recentes por empresa, descartando as mais antigas

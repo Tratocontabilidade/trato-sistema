@@ -92,6 +92,26 @@ export interface NcmOverrideEntry {
   /** Prefixos comparados contra o NCM normalizado (só dígitos, sem pontos). */
   prefixos: string[];
   override: OverrideClassificacao;
+  /**
+   * Quando definido, a sobrescrita só se aplica se o Nome do produto contiver
+   * pelo menos uma destas palavras-chave (já normalizadas — sem acento,
+   * minúsculo). Usado quando o NCM sozinho cobre produtos que não são
+   * realmente da categoria beneficiada (ex.: NCM 1905.90.90 cobre tanto pão
+   * quanto batata chips/salgadinhos — só o primeiro é cesta básica). Quando a
+   * lista não bate com o Nome, a sobrescrita NÃO é aplicada — a linha cai no
+   * padrão de tributação integral (cclasstrib 000001), com a rejeição citada
+   * na Observação para a analista auditar depois. Decisão de política:
+   * mudança deliberada para não gerar Dúvida nesses casos (ver lib/rules.ts).
+   */
+  palavrasChaveExigidas?: string[];
+  /** Rótulo curto da categoria, usado só para compor a Observação quando `palavrasChaveExigidas` rejeita. */
+  categoriaRotulo?: string;
+}
+
+export interface ResultadoOverrideNcm {
+  override?: OverrideClassificacao;
+  /** Preenchido quando o NCM bateu num override com palavra-chave exigida, mas o Nome do produto não confirmou. */
+  rejeitadoPorPalavraChave?: { categoriaRotulo: string; palavrasChaveExigidas: string[] };
 }
 
 /**
@@ -109,13 +129,65 @@ export const NCM_OVERRIDES: NcmOverrideEntry[] = [
   // Anexo I). O regime federal de PIS/COFINS desses mesmos NCMs (que usa
   // uma lista própria, não idêntica a esta) é resolvido separadamente em
   // lib/regras-federais.ts.
+  //
+  // Categorias em que o NCM sozinho cobre produtos claramente diferentes
+  // (ex.: 1905.90.90 cobre tanto pão quanto batata chips; 0201-0207 cobre
+  // tanto carne in natura quanto embutidos/processados de nome atípico)
+  // exigem confirmação por palavra-chave no Nome — decisão de política:
+  // quando não confirma, cai em tributação integral (000001) em vez de
+  // Dúvida, citando a rejeição na Observação (ver lib/rules.ts).
   // ---------------------------------------------------------------------
   {
+    prefixos: ["1006", "0713"], // arroz, feijão e outras leguminosas secas
+    override: {
+      cstIbsCbs: "200",
+      cclasstrib: "200003",
+      redBc: 100,
+      observacao: "Cesta básica nacional — arroz/feijão — redução de 100% no IBS/CBS (LC nº 214/2025, Anexo I).",
+    },
+    palavrasChaveExigidas: ["arroz", "feijao"],
+    categoriaRotulo: "arroz/feijão",
+  },
+  {
+    prefixos: ["0401"], // leite fluido
+    override: {
+      cstIbsCbs: "200",
+      cclasstrib: "200003",
+      redBc: 100,
+      observacao: "Cesta básica nacional — leite — redução de 100% no IBS/CBS (LC nº 214/2025, Anexo I).",
+    },
+    palavrasChaveExigidas: ["leite"],
+    categoriaRotulo: "leite",
+  },
+  {
+    // Capítulo 1905 inteiro (não só "190590" pão comum): também cobre biscoito/
+    // bolacha (190531) e wafer (190532), que a empresa trata na mesma faixa de
+    // cesta básica quando o Nome confirma. NCM 1905.90.90 também é onde caem
+    // batata chips e salgadinhos de pacote — por isso a palavra-chave é
+    // obrigatória aqui, não opcional.
+    prefixos: ["1905"], // pão, bolo, biscoito/bolacha, torrada e demais produtos de panificação
+    override: {
+      cstIbsCbs: "200",
+      cclasstrib: "200003",
+      redBc: 100,
+      observacao: "Cesta básica nacional — pão/panificação — redução de 100% no IBS/CBS (LC nº 214/2025, Anexo I).",
+    },
+    palavrasChaveExigidas: ["pao", "bolo", "torrada", "biscoito", "bolacha"],
+    categoriaRotulo: "pão/panificação",
+  },
+  {
+    prefixos: ["0201", "0202", "0203", "0204", "0207"], // carnes frescas bovinas/suínas/caprinas/aves
+    override: {
+      cstIbsCbs: "200",
+      cclasstrib: "200003",
+      redBc: 100,
+      observacao: "Cesta básica nacional — carnes — redução de 100% no IBS/CBS (LC nº 214/2025, Anexo I).",
+    },
+    palavrasChaveExigidas: ["carne", "frango", "peito", "coxa", "bovina", "bovino", "suina", "suino", "ave", "linguica"],
+    categoriaRotulo: "carnes",
+  },
+  {
     prefixos: [
-      "1006", // arroz
-      "0713", // feijão e outras leguminosas secas
-      "0401", // leite fluido
-      "190590", // pão comum
       "1701", // açúcar
       "1507", // óleo de soja
       "1101", // farinha de trigo
@@ -123,7 +195,6 @@ export const NCM_OVERRIDES: NcmOverrideEntry[] = [
       "0901", // café torrado
       "2501", // sal
       "0407", // ovos
-      "0201", "0202", "0203", "0204", "0207", // carnes frescas bovinas/suínas/aves
       "1902", // macarrão/massas alimentícias comuns
       "03", // peixes frescos (capítulo 3)
       "07", // hortaliças frescas (capítulo 7 — inclui 0713 já listado acima)
@@ -135,6 +206,9 @@ export const NCM_OVERRIDES: NcmOverrideEntry[] = [
       redBc: 100,
       observacao: "Cesta básica nacional — redução de 100% no IBS/CBS (LC nº 214/2025, Anexo I).",
     },
+    // Sem palavra-chave exigida: NCMs específicos o bastante (ou capítulos
+    // inteiros de hortifrúti, onde o risco real é fresco x industrializado —
+    // já tratado à parte em avaliarHortifrutiIsento/avaliarBeneficioIcmsBa).
   },
 
   // ---------------------------------------------------------------------
@@ -196,9 +270,104 @@ export const NCM_OVERRIDES: NcmOverrideEntry[] = [
  * de limpeza, ração animal.
  */
 
-export function buscarOverridePorNcm(ncmDigitos: string): OverrideClassificacao | undefined {
+// ---------------------------------------------------------------------
+// Extração e casamento de palavras-chave — usado tanto para confirmar
+// sobrescritas por NCM (acima) quanto, de forma independente, para o
+// casamento com anexos de ST (lib/anexos.ts) e benefícios de ICMS-BA
+// (avaliarBeneficioIcmsBa, mais abaixo). Extrai os substantivos principais
+// de um texto livre (ex.: a Descrição de uma linha de anexo), ignorando
+// conectivos e qualificadores genéricos demais para identificar uma
+// categoria de produto (ex.: "outros", "produtos", "industrializados",
+// embalagens como "lata"/"pet"/"vidro"). Heurística: cobre plural/singular
+// regular (removendo o "s" final) e uma pequena lista de plurais
+// irregulares do domínio (pão/pães); não é um stemmer completo.
+// ---------------------------------------------------------------------
+
+const STOPWORDS_PALAVRA_CHAVE = new Set([
+  "para", "com", "sem", "por", "sob", "entre", "ate",
+  "outro", "outros", "outra", "outras",
+  "qualquer", "quaisquer", "especie", "especies",
+  "inclusive", "exceto", "tipo", "tipos",
+  "produto", "produtos", "geral", "gerais",
+  "diverso", "diversos", "diversa", "diversas", "demais",
+  "todo", "toda", "todos", "todas",
+  "industrializado", "industrializados", "industrializada", "industrializadas",
+  "similar", "similares", "afim", "afins",
+  // Embalagens/unidades — genéricas demais para identificar categoria (uma
+  // batata chips e uma cerveja podem vir ambas "em lata").
+  "lata", "latas", "pet", "vidro", "vidros", "garrafa", "garrafas",
+  "embalagem", "embalagens", "unidade", "unidades", "pacote", "pacotes",
+  "caixa", "caixas", "sache", "saches", "plastico", "plastica",
+  "descartavel", "descartaveis", "copo", "copos",
+  // Superclasse genérica demais (quase todo item de bebida "é uma bebida").
+  "bebida", "bebidas",
+]);
+
+const SINGULARIZACAO_IRREGULAR: Record<string, string> = {
+  paes: "pao",
+};
+
+function singularizarPalavra(p: string): string {
+  if (SINGULARIZACAO_IRREGULAR[p]) return SINGULARIZACAO_IRREGULAR[p];
+  if (p.length > 3 && p.endsWith("s")) return p.slice(0, -1);
+  return p;
+}
+
+function tokenizarTexto(v: string): string[] {
+  return normalizarTextoAnexo(v)
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/**
+ * Extrai as palavras-chave "de categoria" de um texto livre (ex.: a
+ * Descrição de uma linha de anexo, "Outros bolos industrializados e
+ * produtos de panificação, inclusive pizzas" → ["bolo", "panificacao",
+ * "pizza"]). Retorna lista vazia quando o texto está vazio ou só tem
+ * conectivos/qualificadores genéricos — o chamador decide o comportamento
+ * de reserva nesse caso (ver lib/anexos.ts).
+ */
+export function extrairPalavrasChaveDescricao(descricao: string | undefined): string[] {
+  if (!descricao) return [];
+  const tokens = tokenizarTexto(descricao).filter((t) => t.length > 2 && !STOPWORDS_PALAVRA_CHAVE.has(t));
+  return Array.from(new Set(tokens.map(singularizarPalavra)));
+}
+
+/**
+ * Confere se pelo menos uma das palavras-chave aparece como palavra inteira
+ * (não substring) no Nome do produto já normalizado — comparação por
+ * conjunto de tokens, não por `includes`, para não confundir uma palavra
+ * curta (ex.: "pao") com um trecho de outra palavra maior (ex.: "presunto"
+ * não deve casar com uma keyword de 3 letras qualquer).
+ */
+export function nomeContemPalavraChave(nomeNormalizado: string, palavrasChave: string[]): boolean {
+  if (!nomeNormalizado || palavrasChave.length === 0) return false;
+  const tokensNome = new Set(tokenizarTexto(nomeNormalizado).map(singularizarPalavra));
+  return palavrasChave.some((k) => tokensNome.has(k));
+}
+
+/**
+ * Resolve a sobrescrita por NCM (acima), aplicando a palavra-chave exigida
+ * (quando houver) contra o Nome do produto. Quando o NCM bate mas a
+ * palavra-chave não confirma, NÃO retorna o override (a linha cai no padrão
+ * de tributação integral) — `rejeitadoPorPalavraChave` carrega o contexto
+ * para a Observação da linha (ver lib/rules.ts).
+ */
+export function buscarOverridePorNcm(ncmDigitos: string, nomeNormalizado: string): ResultadoOverrideNcm {
   const entrada = NCM_OVERRIDES.find((e) => e.prefixos.some((p) => ncmDigitos.startsWith(p)));
-  return entrada?.override;
+  if (!entrada) return {};
+  if (!entrada.palavrasChaveExigidas || entrada.palavrasChaveExigidas.length === 0) {
+    return { override: entrada.override };
+  }
+  if (nomeContemPalavraChave(nomeNormalizado, entrada.palavrasChaveExigidas)) {
+    return { override: entrada.override };
+  }
+  return {
+    rejeitadoPorPalavraChave: {
+      categoriaRotulo: entrada.categoriaRotulo ?? entrada.override.observacao,
+      palavrasChaveExigidas: entrada.palavrasChaveExigidas,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -473,12 +642,14 @@ function avaliarHortifrutiIsento(ncmDigitos: string, nomeNormalizado: string): A
   if (posicao === "0801" || posicao === "0802") return null; // castanhas/nozes/amêndoas/avelãs — exceção expressa.
 
   if (KEYWORDS_HORTIFRUTI_INDUSTRIALIZADO.some((k) => nomeNormalizado.includes(k))) {
+    // Decisão de política: NCM bate mas o Nome indica industrializado — a isenção
+    // não é confirmada, então NÃO retorna cstIcms (cai no Padrão A, CST 000), com a
+    // rejeição citada na Observação. Não é mais Dúvida (ver lib/rules.ts).
     return {
-      ambiguo: true,
-      motivoAmbiguo:
-        "NCM está na faixa de hortifrutícolas frescos (Art. 265, I 'a' RICMS-BA), mas o Nome indica produto " +
-        "industrializado (conserva/seco/desidratado/enlatado/em calda/cristalizado) — confirme o NCM antes " +
-        "de aplicar a isenção.",
+      observacao:
+        "Isenção (Art. 265, I 'a' RICMS-BA, hortifrutícola in natura) rejeitada - NCM está na faixa de " +
+        "hortifrutícolas frescos, mas o Nome indica produto industrializado (conserva/seco/desidratado/" +
+        "enlatado/em calda/cristalizado) - aplicado CST ICMS 000.",
     };
   }
 
@@ -511,11 +682,13 @@ export function avaliarBeneficioIcmsBa(ncmDigitos: string, nomeNormalizado: stri
       };
     }
     if (uht) return null; // Segue Padrão A normalmente.
+    // Decisão de política: nem "pasteurizado" nem "UHT" aparecem no Nome — a isenção
+    // não é confirmada, cai no Padrão A (CST 000) em vez de Dúvida (ver lib/rules.ts).
     return {
-      ambiguo: true,
-      motivoAmbiguo:
-        "NCM 0401.20 pode ser leite pasteurizado tipo A/B (isento, Art. 265 II 'a' RICMS-BA) ou UHT/longa " +
-        "vida (não isento) — o Nome não indica qual; confirme antes de classificar.",
+      observacao:
+        "Isenção (Art. 265, II 'a' RICMS-BA, leite pasteurizado) rejeitada - NCM 0401.20 pode ser leite " +
+        "pasteurizado tipo A/B (isento) ou UHT/longa vida (não isento), mas o Nome não confirma nenhum dos " +
+        "dois - aplicado CST ICMS 000.",
     };
   }
 
@@ -524,7 +697,9 @@ export function avaliarBeneficioIcmsBa(ncmDigitos: string, nomeNormalizado: stri
     return { cstIcms: "040", observacao: "Isento - Art. 265, II 'b' RICMS-BA (farinha de mandioca)." };
   }
 
-  // Arroz e feijão (Art. 265, II "c").
+  // Arroz e feijão (Art. 265, II "c"). Exige "arroz" ou "feijão" no Nome — o mesmo
+  // NCM pode, na prática do cliente, vir associado a um item cadastrado errado;
+  // sem confirmação, cai no Padrão A (CST 000) em vez de Dúvida (ver lib/rules.ts).
   if (
     ncmDigitos.startsWith("1006") ||
     ncmDigitos.startsWith("071331") ||
@@ -532,6 +707,13 @@ export function avaliarBeneficioIcmsBa(ncmDigitos: string, nomeNormalizado: stri
     ncmDigitos.startsWith("071333") ||
     ncmDigitos.startsWith("071335")
   ) {
+    if (!nomeContemPalavraChave(nomeNormalizado, ["arroz", "feijao"])) {
+      return {
+        observacao:
+          `Isenção (Art. 265, II 'c' RICMS-BA, arroz/feijão) rejeitada - NCM ${ncmDigitos} consta na faixa ` +
+          `de arroz/feijão, mas a descrição do produto não confirma "arroz" ou "feijão" - aplicado CST ICMS 000.`,
+      };
+    }
     return { cstIcms: "040", observacao: "Isento - Art. 265, II 'c' RICMS-BA (arroz e feijão)." };
   }
 
@@ -556,11 +738,36 @@ export function avaliarBeneficioIcmsBa(ncmDigitos: string, nomeNormalizado: stri
   const hortifruti = avaliarHortifrutiIsento(ncmDigitos, nomeNormalizado);
   if (hortifruti) return hortifruti;
 
-  // Redução de BC para carga tributária de 12% — óleo refinado de soja/algodão (Art. 268, XXII).
-  if (ncmDigitos.startsWith("150790") || ncmDigitos.startsWith("151229")) {
+  // Redução de BC para carga tributária de 12% — óleo refinado de soja/algodão (Art. 268,
+  // XXII). Exige "óleo" e o tipo (soja/algodão) no Nome — sem confirmação, cai no Padrão A
+  // (CST 000) em vez de Dúvida (ver lib/rules.ts).
+  if (ncmDigitos.startsWith("150790")) {
+    const confirmaSoja = nomeContemPalavraChave(nomeNormalizado, ["oleo"]) && nomeContemPalavraChave(nomeNormalizado, ["soja"]);
+    if (!confirmaSoja) {
+      return {
+        observacao:
+          `Redução BC (Art. 268 XXII RICMS-BA, óleo de soja) rejeitada - NCM ${ncmDigitos} consta na faixa ` +
+          `de óleo de soja, mas a descrição do produto não confirma "óleo" e "soja" - aplicado CST ICMS 000.`,
+      };
+    }
     return {
       cstIcms: "020",
-      observacao: "Redução BC - Art. 268 XXII RICMS-BA (carga 12%, óleo refinado de soja/algodão).",
+      observacao: "Redução BC - Art. 268 XXII RICMS-BA (carga 12%, óleo refinado de soja).",
+    };
+  }
+  if (ncmDigitos.startsWith("151229")) {
+    const confirmaAlgodao =
+      nomeContemPalavraChave(nomeNormalizado, ["oleo"]) && nomeContemPalavraChave(nomeNormalizado, ["algodao"]);
+    if (!confirmaAlgodao) {
+      return {
+        observacao:
+          `Redução BC (Art. 268 XXII RICMS-BA, óleo de algodão) rejeitada - NCM ${ncmDigitos} consta na faixa ` +
+          `de óleo de algodão, mas a descrição do produto não confirma "óleo" e "algodão" - aplicado CST ICMS 000.`,
+      };
+    }
+    return {
+      cstIcms: "020",
+      observacao: "Redução BC - Art. 268 XXII RICMS-BA (carga 12%, óleo refinado de algodão).",
     };
   }
 

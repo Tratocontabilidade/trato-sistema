@@ -30,7 +30,7 @@ import {
 } from "./tables";
 import { resolverRegimeFederal } from "./regras-federais";
 import { produtoPertenceAoSegmento, type Diretiva } from "./instructions";
-import { buscarNoAnexo, type ResultadoAnexo } from "./anexos";
+import { buscarNoAnexo, type DecisaoAnexo } from "./anexos";
 import type { ClientProdutoEntrada, ClientProdutoResultado, ContextoClassificacao, StatusLinha } from "./types";
 
 const CONTEXTO_PADRAO: ContextoClassificacao = { regime: "nao_cumulativo", diretivas: [] };
@@ -333,8 +333,11 @@ export function classificarProdutoCliente(
 
   // NCM sabidamente ambíguo (lib/tables.ts): nunca classificar automaticamente.
   // Usa casamento por prefixo (não exige os 8 dígitos exatos) para pegar também
-  // NCMs sujos/curtos que ainda assim caem num prefixo ambíguo conhecido.
-  const possivelAmbiguo = buscarOverridePorNcm(ncmDigitos);
+  // NCMs sujos/curtos que ainda assim caem num prefixo ambíguo conhecido. Esta é a
+  // única ambiguidade de NCM_OVERRIDES que ainda vira Dúvida — cobre casos onde o
+  // mesmo código tem dois tratamentos tributários genuinamente diferentes (não uma
+  // palavra-chave que confirma ou não uma única categoria, ver buscarOverridePorNcm).
+  const possivelAmbiguo = buscarOverridePorNcm(ncmDigitos, nomeNormalizado).override;
   if (possivelAmbiguo?.ambiguo) {
     return construirResultadoDuvida(input, possivelAmbiguo.observacao);
   }
@@ -373,22 +376,35 @@ export function classificarProdutoCliente(
   // tem exatamente 8 dígitos é o que permitia a coluna Tributação (que pode
   // trazer um valor desatualizado) decidir ST sozinha, sem confirmação.
   const anexosAtivos = (contexto.anexosAtivos ?? []).filter((a) => a.ativo);
-  const resultadoAnexo: ResultadoAnexo | null =
+  const decisaoAnexo: DecisaoAnexo | null =
     anexosAtivos.length > 0 ? buscarNoAnexo(ncmDigitos, nomeNormalizado, anexosAtivos) : null;
-  // "ambiguo": o NCM cai num prefixo amplo do anexo (ex.: "2106.9"), mas o Nome do
-  // produto não confirma nem descarta a palavra-chave exigida pela descrição da
-  // linha (ex.: "bebidas energéticas") — regra de ouro: não decide ST no escuro.
-  if (resultadoAnexo === "ambiguo") {
-    return construirResultadoDuvida(
-      input,
-      "NCM consta em anexo ativo da empresa num item de família ampla, mas o Nome do produto não confirma a palavra-chave exigida pela descrição do item — não é possível determinar ST com segurança."
-    );
-  }
-  if (resultadoAnexo !== null && (categoria === "tributado" || categoria === "st")) {
-    if (resultadoAnexo === "st" && categoria !== "st") {
-      pendencias.push({ peso: 0, mensagem: "ST determinada pelo anexo ativo da empresa (NCM encontrado)." });
-      categoria = "st";
-    } else if (resultadoAnexo === "nao_st" && categoria === "st") {
+  const anexoConfirmaSt = decisaoAnexo?.tipo === "st";
+  // Decisão de política: quando o NCM bate com um item do anexo mas o Nome do
+  // produto não confirma a palavra-chave da Descrição, NÃO é mais Dúvida — é
+  // tratado como Tributado normal automaticamente, citando o item rejeitado na
+  // Observação para a analista auditar depois (agiliza a revisão em prazo apertado).
+  if (decisaoAnexo && (categoria === "tributado" || categoria === "st")) {
+    if (decisaoAnexo.tipo === "st") {
+      if (categoria !== "st") {
+        const motivo =
+          decisaoAnexo.motivoSt === "palavra_chave"
+            ? `e descrição bate com item do anexo ("${decisaoAnexo.item.descricao}")`
+            : "consta no anexo ativo da empresa";
+        pendencias.push({ peso: 0, mensagem: `ST confirmado - NCM ${ncmDigitos} ${motivo}.` });
+        categoria = "st";
+      }
+    } else if (decisaoAnexo.tipo === "rejeitado") {
+      // Registrado sempre (não só quando muda a categoria) — a analista precisa saber
+      // que o NCM apareceu num item do anexo mesmo quando o resultado final já seria
+      // Tributado de qualquer forma, para poder auditar a rejeição depois.
+      pendencias.push({
+        peso: 0,
+        mensagem:
+          `NCM ${ncmDigitos} consta no anexo (item: "${decisaoAnexo.item.descricao}"), mas a descrição do ` +
+          `produto não confirma - classificado como Tributado normal.`,
+      });
+      categoria = "tributado";
+    } else if (categoria === "st") {
       pendencias.push({
         peso: 0,
         mensagem: "NCM não consta em nenhum anexo ativo da empresa — tratado como tributado normal (sem ST).",
@@ -398,14 +414,14 @@ export function classificarProdutoCliente(
   }
 
   // Validação cruzada: CFOP já preenchido pelo cliente indicando ST/normal em desacordo com o anexo.
-  if (resultadoAnexo !== null && estaPreenchido(input.cfopSaidas)) {
+  if (decisaoAnexo && estaPreenchido(input.cfopSaidas)) {
     const cfopDigitos = String(input.cfopSaidas).replace(/\D/g, "");
-    if (cfopDigitos === "5405" && resultadoAnexo === "nao_st") {
+    if (cfopDigitos === "5405" && !anexoConfirmaSt) {
       pendencias.push({
         peso: 2,
         mensagem: "CFOP informado indica Substituição Tributária (5405), mas o NCM não consta em nenhum anexo ativo da empresa.",
       });
-    } else if (cfopDigitos === "5102" && resultadoAnexo === "st") {
+    } else if (cfopDigitos === "5102" && anexoConfirmaSt) {
       pendencias.push({
         peso: 2,
         mensagem: "CFOP informado indica tributação normal (5102), mas o NCM consta em anexo ativo da empresa como ST.",
@@ -426,9 +442,18 @@ export function classificarProdutoCliente(
         : null;
   // Sobrescritas por NCM só se aplicam sobre um padrão de Tributação existente.
   // Casamento por prefixo — não exige os 8 dígitos exatos, pela mesma razão do anexo acima.
-  const override = padraoBase ? buscarOverridePorNcm(ncmDigitos) : undefined;
+  const resultadoOverride = padraoBase ? buscarOverridePorNcm(ncmDigitos, nomeNormalizado) : null;
+  const override = resultadoOverride?.override;
   if (override) {
     pendencias.push({ peso: 0, mensagem: `Sobrescrita por NCM aplicada: ${override.observacao}` });
+  } else if (resultadoOverride?.rejeitadoPorPalavraChave) {
+    const { categoriaRotulo } = resultadoOverride.rejeitadoPorPalavraChave;
+    pendencias.push({
+      peso: 0,
+      mensagem:
+        `cClassTrib de ${categoriaRotulo} rejeitado - NCM ${ncmDigitos} consta na faixa de ${categoriaRotulo}, ` +
+        `mas a descrição do produto não confirma - aplicado 000001 (tributação integral).`,
+    });
   }
 
   // FCP 2% de cosméticos (Bahia, IN SAT nº 005/2016) — só avaliado para produtos que
